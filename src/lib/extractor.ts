@@ -1,14 +1,21 @@
-const cheerio = require('cheerio');
+import * as cheerio from 'cheerio';
+import { Skill } from '../types';
 
-class Extractor {
-  static extract(html, skill) {
+export interface ExtractedContent {
+  title: string;
+  content: string;
+  author: string;
+}
+
+export class Extractor {
+  static extract(html: string, skill?: Skill): ExtractedContent {
     if (skill && skill.extract) {
       return Extractor.extractWithSkill(html, skill.extract);
     }
     return Extractor.extractDefault(html);
   }
 
-  static extractDefault(html) {
+  static extractDefault(html: string): ExtractedContent {
     const $ = cheerio.load(html);
     $('script, style, nav, header, footer, aside, noscript').remove();
 
@@ -17,9 +24,9 @@ class Extractor {
                   'Untitled';
 
     const article = $('article').html() ||
-                     $('main').html() ||
-                     $('.content').html() ||
-                     $('body').html();
+                   $('main').html() ||
+                   $('.content').html() ||
+                   $('body').html();
 
     return {
       title,
@@ -28,7 +35,7 @@ class Extractor {
     };
   }
 
-  static extractWithSkill(html, extract) {
+  static extractWithSkill(html: string, extract: NonNullable<Skill['extract']>): ExtractedContent {
     const $ = cheerio.load(html);
 
     const excludeSelectors = extract.exclude || [];
@@ -46,7 +53,7 @@ class Extractor {
     if (extract.content) {
       const contentEl = $(extract.content).first();
       if (contentEl.length) {
-        content = Extractor.htmlToMarkdown(cheerio.load(contentEl.html()));
+        content = Extractor.htmlToMarkdown(cheerio.load(contentEl.html() || ''));
       }
     }
 
@@ -58,14 +65,14 @@ class Extractor {
     return { title, content, author };
   }
 
-  static htmlToMarkdown($) {
-    const blocks = [];
+  static htmlToMarkdown($: cheerio.CheerioAPI): string {
+    const blocks: string[] = [];
 
     $('h1, h2, h3, h4, h5, h6').each((_, el) => {
       const level = el.tagName[1];
       const text = $(el).text().trim();
       if (text) {
-        blocks.push(`${'#'.repeat(level)} ${text}`);
+        blocks.push(`${'#'.repeat(parseInt(level))} ${text}`);
       }
     });
 
@@ -109,5 +116,3 @@ class Extractor {
     return blocks.join('\n\n');
   }
 }
-
-module.exports = { Extractor };

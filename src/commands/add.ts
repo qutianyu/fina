@@ -1,18 +1,24 @@
-const fs = require('fs-extra');
-const path = require('path');
-const axios = require('axios');
-const chalk = require('chalk');
-const { SkillManager } = require('../lib/skills.js');
-const { Extractor } = require('../lib/extractor.js');
-const { LLMClient } = require('../lib/llm.js');
+import * as fs from 'fs-extra';
+import * as path from 'path';
+import axios from 'axios';
+import chalk from 'chalk';
+import { SkillManager } from '../lib/skills';
+import { Extractor } from '../lib/extractor';
+import { LLMClient } from '../lib/llm';
+import { ConfigManager } from '../lib/config';
+import { Skill } from '../types';
+import { generateId } from '../lib/utils';
 
-class AddCommand {
-  constructor(config, skillManager = null) {
+export class AddCommand {
+  private config: ConfigManager;
+  private skillManager: SkillManager | null;
+
+  constructor(config: ConfigManager, skillManager: SkillManager | null = null) {
     this.config = config;
     this.skillManager = skillManager;
   }
 
-  async execute(source, isDirectory = false) {
+  async execute(source: string, isDirectory: boolean = false): Promise<void> {
     console.log(chalk.cyan(`Adding: ${source}`));
 
     if (source.startsWith('http://') || source.startsWith('https://')) {
@@ -20,11 +26,11 @@ class AddCommand {
     } else if (isDirectory) {
       await this.addFromDirectory(source);
     } else {
-      await this.addFromFile(source);
+      await this.addFromFile(source, false);
     }
   }
 
-  async addFromUrl(url) {
+  async addFromUrl(url: string): Promise<void> {
     try {
       console.log(chalk.gray('Fetching webpage...'));
       const response = await axios.get(url, {
@@ -40,7 +46,7 @@ class AddCommand {
         console.log(chalk.gray(`  Using skill: ${skill.name}`));
       }
 
-      const { title, content, author } = Extractor.extract(response.data, skill);
+      const { title, content, author } = Extractor.extract(response.data, skill ?? undefined);
 
       if (!content) {
         console.log(chalk.red('Failed to extract content from page'));
@@ -64,11 +70,10 @@ class AddCommand {
 
       // Write with frontmatter
       const frontmatter = `---
-id: ${this.generateId()}
+id: ${generateId()}
 source: ${url}
 title: ${title}
 author: ${author}
-addedAt: ${new Date().toISOString()}
 type: article
 ---
 
@@ -79,11 +84,11 @@ type: article
       console.log(chalk.gray(`  Title: ${title}`));
 
     } catch (err) {
-      console.log(chalk.red(`Failed to fetch URL: ${err.message}`));
+      console.log(chalk.red(`Failed to fetch URL: ${(err as Error).message}`));
     }
   }
 
-  async cleanContent(content, skill = null) {
+  async cleanContent(content: string, skill: Skill | null = null): Promise<string> {
     if (!(await this.config.ensureConfigured())) {
       // Fallback to original content if not configured
       return content;
@@ -106,7 +111,7 @@ Output ONLY the cleaned content, nothing else. Do not add explanations or notes.
     }
 
     const messages = [
-      { role: 'user', content: `Clean the following web content:\n\n${content}` }
+      { role: 'user' as const, content: `Clean the following web content:\n\n${content}` }
     ];
 
     const result = await llm.createMessage({
@@ -125,15 +130,7 @@ Output ONLY the cleaned content, nothing else. Do not add explanations or notes.
     return cleanedContent;
   }
 
-  generateId() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-      const r = Math.random() * 16 | 0;
-      const v = c === 'x' ? r : (r & 0x3 | 0x8);
-      return v.toString(16);
-    });
-  }
-
-  async addFromFile(filePath) {
+  async addFromFile(filePath: string, useTimestampDir: boolean = true): Promise<void> {
     try {
       // Expand ~ to home directory
       if (filePath.startsWith('~/')) {
@@ -154,7 +151,7 @@ Output ONLY the cleaned content, nothing else. Do not add explanations or notes.
 
       const rawDir = this.config.getRawDir();
       const ext = path.extname(resolvedPath).toLowerCase();
-      let targetDir;
+      let targetDir: string;
 
       // Determine target directory based on extension
       if (['.md', '.txt', '.html'].includes(ext)) {
@@ -164,13 +161,20 @@ Output ONLY the cleaned content, nothing else. Do not add explanations or notes.
       } else if (['.jpg', '.jpeg', '.png', '.gif', '.svg', '.webp'].includes(ext)) {
         targetDir = path.join(rawDir, 'images');
       } else {
-        targetDir = path.join(rawDir, 'documents');
+        targetDir = path.join(rawDir, 'articles');
       }
 
-      const timestamp = Date.now();
-      const dir = path.join(targetDir, String(timestamp));
-      await fs.ensureDir(dir);
-      const destPath = path.join(dir, path.basename(resolvedPath));
+      // Use flat structure for batch-add (no timestamp subdirectory)
+      let destPath: string;
+      if (useTimestampDir) {
+        const timestamp = Date.now();
+        const dir = path.join(targetDir, String(timestamp));
+        await fs.ensureDir(dir);
+        destPath = path.join(dir, path.basename(resolvedPath));
+      } else {
+        await fs.ensureDir(targetDir);
+        destPath = path.join(targetDir, path.basename(resolvedPath));
+      }
       await fs.copy(resolvedPath, destPath);
 
       console.log(chalk.green(`✓ Copied to: ${path.relative(process.cwd(), destPath)}`));
@@ -178,11 +182,11 @@ Output ONLY the cleaned content, nothing else. Do not add explanations or notes.
       console.log(chalk.gray(`  Type: ${ext || 'unknown'}`));
 
     } catch (err) {
-      console.log(chalk.red(`Failed to copy file: ${err.message}`));
+      console.log(chalk.red(`Failed to copy file: ${(err as Error).message}`));
     }
   }
 
-  async addFromDirectory(dirPath) {
+  async addFromDirectory(dirPath: string): Promise<void> {
     try {
       if (dirPath.startsWith('~/')) {
         dirPath = path.join(process.env.HOME || '', dirPath.slice(2));
@@ -210,17 +214,106 @@ Output ONLY the cleaned content, nothing else. Do not add explanations or notes.
 
       console.log(chalk.cyan(`Adding ${files.length} files from: ${dirPath}\n`));
 
+      // Use single timestamp for all files in batch
+      const timestamp = Date.now();
+
+      // First, collect all images referenced in markdown files
+      const imageMap = new Map<string, string>(); // originalPath -> newPath
       for (const file of files) {
-        await this.addFromFile(file);
+        if (file.endsWith('.md') || file.endsWith('.markdown')) {
+          const content = await fs.readFile(file, 'utf-8');
+          const imagePaths = this.extractImagePaths(content);
+          for (const imgPath of imagePaths) {
+            if (!imgPath.startsWith('http://') && !imgPath.startsWith('https://')) {
+              // Resolve relative to the markdown file
+              const imgFullPath = path.resolve(path.dirname(file), imgPath);
+              if (await fs.pathExists(imgFullPath)) {
+                imageMap.set(imgFullPath, imgPath);
+              }
+            }
+          }
+        }
+      }
+
+      // Copy all referenced images first
+      const imagesDir = path.join(this.config.getRawDir(), 'images', String(timestamp));
+      await fs.ensureDir(imagesDir);
+      for (const [imgFullPath] of imageMap) {
+        const imgFileName = path.basename(imgFullPath);
+        const destPath = path.join(imagesDir, imgFileName);
+        await fs.copy(imgFullPath, destPath);
+        imageMap.set(imgFullPath, `../images/${timestamp}/${imgFileName}`);
+      }
+
+      // Copy all files, updating markdown image paths
+      for (const file of files) {
+        await this.copyFileInBatch(file, timestamp, imageMap);
       }
 
       console.log(chalk.green(`\n✓ Added ${files.length} files`));
+      if (imageMap.size > 0) {
+        console.log(chalk.gray(`  + ${imageMap.size} images referenced in markdown`));
+      }
     } catch (err) {
-      console.log(chalk.red(`Failed to add directory: ${err.message}`));
+      console.log(chalk.red(`Failed to add directory: ${(err as Error).message}`));
     }
   }
 
-  async collectFiles(dir) {
+  private async copyFileInBatch(filePath: string, timestamp: number, imageMap?: Map<string, string>): Promise<void> {
+    try {
+      const resolvedPath = path.resolve(filePath);
+      const rawDir = this.config.getRawDir();
+      const ext = path.extname(resolvedPath).toLowerCase();
+      let targetDir: string;
+      let content: string | null = null;
+
+      if (['.md', '.txt', '.html'].includes(ext)) {
+        targetDir = path.join(rawDir, 'articles', String(timestamp));
+      } else if (['.js', '.ts', '.py', '.go', '.rs', '.java', '.cpp', '.c', '.rb', '.php'].includes(ext)) {
+        targetDir = path.join(rawDir, 'code', String(timestamp));
+      } else if (['.jpg', '.jpeg', '.png', '.gif', '.svg', '.webp'].includes(ext)) {
+        targetDir = path.join(rawDir, 'images', String(timestamp));
+      } else {
+        targetDir = path.join(rawDir, 'articles', String(timestamp));
+      }
+
+      await fs.ensureDir(targetDir);
+      const destPath = path.join(targetDir, path.basename(resolvedPath));
+
+      // For markdown files, update image paths
+      if (['.md', '.markdown'].includes(ext) && imageMap && imageMap.size > 0) {
+        content = await fs.readFile(resolvedPath, 'utf-8');
+        // Update image paths: originalRelativePath -> newRelativePath
+        for (const [imgFullPath, newPath] of imageMap) {
+          const imgBasename = path.basename(imgFullPath);
+          // Match any reference to this image (with various path patterns)
+          const regex = new RegExp(`!\\[([^\\]]*)\\]\\(([^)]*${imgBasename}[^)]*)\\)`, 'g');
+          content = content.replace(regex, (match, alt, oldPath) => {
+            return `![${alt}](${newPath})`;
+          });
+        }
+        await fs.writeFile(destPath, content);
+      } else {
+        await fs.copy(resolvedPath, destPath);
+      }
+
+      console.log(chalk.gray(`  + ${path.basename(resolvedPath)}`));
+    } catch (err) {
+      console.log(chalk.red(`Failed to copy ${filePath}: ${(err as Error).message}`));
+    }
+  }
+
+  private extractImagePaths(content: string): string[] {
+    const paths: string[] = [];
+    const regex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+    let match;
+    while ((match = regex.exec(content)) !== null) {
+      paths.push(match[2]);
+    }
+    return paths;
+  }
+
+  async collectFiles(dir: string): Promise<string[]> {
     const supportedExtensions = [
       // Documents
       '.md', '.markdown', '.txt', '.json', '.jsonc', '.toml', '.yaml', '.yml', '.xml',
@@ -229,7 +322,7 @@ Output ONLY the cleaned content, nothing else. Do not add explanations or notes.
       // Images
       '.jpg', '.jpeg', '.png', '.img'
     ];
-    const files = [];
+    const files: string[] = [];
 
     const entries = await fs.readdir(dir, { withFileTypes: true });
 
@@ -253,5 +346,3 @@ Output ONLY the cleaned content, nothing else. Do not add explanations or notes.
     return files;
   }
 }
-
-module.exports = { AddCommand };

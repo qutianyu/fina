@@ -1,17 +1,24 @@
-const fs = require('fs-extra');
-const path = require('path');
-const chalk = require('chalk');
-const matter = require('gray-matter');
-const { LLMClient } = require('../lib/llm.js');
+import * as fs from 'fs-extra';
+import * as path from 'path';
+import chalk from 'chalk';
+import matter from 'gray-matter';
+import { LLMClient } from '../lib/llm';
+import { ConfigManager } from '../lib/config';
+import { Source, Concept, IndexedSource } from '../types';
+import { generateId, slugify } from '../lib/utils';
 
-class MakeCommand {
-  constructor(config) {
+const MAX_CONCEPT_DEFINITIONS = 20;
+
+export class MakeCommand {
+  private config: ConfigManager;
+  private sources: Source[] = [];
+  private concepts: Concept[] = [];
+
+  constructor(config: ConfigManager) {
     this.config = config;
-    this.sources = [];
-    this.concepts = [];
   }
 
-  async execute() {
+  async execute(): Promise<void> {
     console.log(chalk.cyan('\n🔨 Compiling wiki...\n'));
 
     if (!await this.config.ensureConfigured()) {
@@ -52,22 +59,16 @@ class MakeCommand {
     console.log(chalk.gray('\n📝 Updating wiki files with relationships...'));
     await this.writeWikiFiles(wikiDir);
 
-    // Step 6: Update index with concepts (sources already written incrementally)
-    const indexPath = path.join(wikiDir, 'index.json');
-    let index = { version: '1.0', lastUpdated: new Date().toISOString(), sources: [], concepts: [] };
-    if (await fs.pathExists(indexPath)) {
-      index = await fs.readJson(indexPath);
-    }
-    index.concepts = this.concepts;
-    index.lastUpdated = new Date().toISOString();
-    await fs.writeJson(indexPath, index, { spaces: 2 });
+    // Step 6: Write concepts to separate index file
+    const conceptsIndexPath = path.join(wikiDir, 'concepts-index.json');
+    await fs.writeJson(conceptsIndexPath, this.concepts, { spaces: 2 });
 
     console.log(chalk.green('\n✅ Wiki compiled successfully!'));
     console.log(chalk.gray(`  Sources: ${this.sources.length}`));
     console.log(chalk.gray(`  Concepts: ${this.concepts.length}`));
   }
 
-  async collectRawFiles(dir) {
+  async collectRawFiles(dir: string): Promise<void> {
     const items = await fs.readdir(dir, { withFileTypes: true });
 
     for (const item of items) {
@@ -84,7 +85,7 @@ class MakeCommand {
           const content = await fs.readFile(fullPath, 'utf-8');
           const parsed = matter(content);
           this.sources.push({
-            id: parsed.data.id || this.generateId(),
+            id: parsed.data.id || generateId(),
             path: path.relative(dir, fullPath),
             type: 'article',
             title: parsed.data.title || item.name.replace(ext, ''),
@@ -92,13 +93,12 @@ class MakeCommand {
             summary: parsed.data.summary || '',
             concepts: parsed.data.concepts || [],
             backlinks: [],
-            addedAt: parsed.data.addedAt || stats.mtime.toISOString(),
             source: parsed.data.source || 'local'
           });
         } else if (['.js', '.ts', '.py', '.go', '.rs'].includes(ext)) {
           const content = await fs.readFile(fullPath, 'utf-8');
           this.sources.push({
-            id: this.generateId(),
+            id: generateId(),
             path: path.relative(dir, fullPath),
             type: 'code',
             title: item.name,
@@ -106,7 +106,6 @@ class MakeCommand {
             summary: '',
             concepts: [],
             backlinks: [],
-            addedAt: stats.mtime.toISOString(),
             source: 'local'
           });
         }
@@ -115,7 +114,7 @@ class MakeCommand {
     }
   }
 
-  async generateSummaries() {
+  async generateSummaries(): Promise<void> {
     const client = new LLMClient(this.config);
     const batchSize = 3;
     const lang = this.config.getLanguage();
@@ -140,7 +139,7 @@ class MakeCommand {
     }
   }
 
-  async generateSummariesAllAtOnce(client, lang, isZh) {
+  async generateSummariesAllAtOnce(client: LLMClient, lang: string, isZh: boolean): Promise<void> {
     const systemPrompt = isZh
       ? '请用中文回答。'
       : 'Please respond in English.';
@@ -237,13 +236,13 @@ Compressed content...
 
       console.log(chalk.green(`  ✓ All ${this.sources.length} sources summarized and saved`));
     } catch (err) {
-      console.log(chalk.yellow(`  ⚠ Failed to process all at once: ${err.message}`));
+      console.log(chalk.yellow(`  ⚠ Failed to process all at once: ${(err as Error).message}`));
       console.log(chalk.gray('  Falling back to batched processing...'));
       await this.generateSummariesBatched(client, 3, lang, isZh);
     }
   }
 
-  async generateSummariesBatched(client, batchSize, lang, isZh) {
+  async generateSummariesBatched(client: LLMClient, batchSize: number, lang: string, isZh: boolean): Promise<void> {
     const systemPrompt = isZh
       ? '请用中文回答。'
       : 'Please respond in English.';
@@ -327,29 +326,19 @@ Format for each:
 
         console.log(chalk.green(`  ✓ ${progress} Summarized and saved batch`));
       } catch (err) {
-        console.log(chalk.yellow(`  ⚠ ${progress} Failed to summarize batch: ${err.message}`));
+        console.log(chalk.yellow(`  ⚠ ${progress} Failed to summarize batch: ${(err as Error).message}`));
       }
     }
   }
 
-  async writeSourceFile(source) {
+  async writeSourceFile(source: Source): Promise<void> {
     const wikiDir = this.config.getWikiDir();
-    // Extract timestamp dir and filename from source.path
-    // path format: "articles/1234567890/title.md" or "code/1234567891/script.js"
-    const pathParts = source.path.split('/');
-    let summaryPath;
-    if (pathParts.length >= 2) {
-      // Use same structure as raw: type/timestamp/filename
-      const type = pathParts[0]; // articles, code, etc.
-      const timestamp = pathParts[1]; // millisecond timestamp
-      const filename = pathParts[pathParts.length - 1];
-      const summaryDir = path.join(wikiDir, 'summaries', type, timestamp);
-      await fs.ensureDir(summaryDir);
-      summaryPath = path.join(summaryDir, filename);
-    } else {
-      // Fallback to id-based naming
-      summaryPath = path.join(wikiDir, 'summaries', `${source.id}.md`);
-    }
+    // Use flat structure: summaries/{type}/{slugified-title}.md
+    const type = source.type; // 'articles' or 'code'
+    const titleSlug = slugify(source.title);
+    const summaryDir = path.join(wikiDir, 'summaries', type);
+    await fs.ensureDir(summaryDir);
+    const summaryPath = path.join(summaryDir, `${titleSlug}.md`);
 
     const contentToStore = source.compressedContent || source.content || '';
     const content = matter.stringify(contentToStore, {
@@ -358,38 +347,35 @@ Format for each:
       type: source.type,
       summary: source.summary || '',
       concepts: source.concepts || [],
-      backlinks: source.backlinks || [],
-      addedAt: source.addedAt
+      backlinks: source.backlinks || []
     });
     await fs.writeFile(summaryPath, content);
 
-    // Update index.json incrementally
-    const indexPath = path.join(wikiDir, 'index.json');
-    let index = { version: '1.0', lastUpdated: new Date().toISOString(), sources: [], concepts: [] };
-    if (await fs.pathExists(indexPath)) {
-      index = await fs.readJson(indexPath);
+    // Update sources-index.json incrementally
+    const sourcesIndexPath = path.join(wikiDir, 'sources-index.json');
+    let sources: IndexedSource[] = [];
+    if (await fs.pathExists(sourcesIndexPath)) {
+      sources = await fs.readJson(sourcesIndexPath) as IndexedSource[];
     }
     // Update or add this source in index
-    const existingIdx = index.sources.findIndex(s => s.id === source.id);
-    const sourceEntry = {
+    const existingIdx = sources.findIndex(s => s.id === source.id);
+    const sourceEntry: IndexedSource = {
       id: source.id,
       title: source.title,
       type: source.type,
       summary: source.summary || '',
       concepts: source.concepts || [],
-      backlinks: source.backlinks || [],
-      addedAt: source.addedAt
+      backlinks: source.backlinks || []
     };
     if (existingIdx >= 0) {
-      index.sources[existingIdx] = sourceEntry;
+      sources[existingIdx] = sourceEntry;
     } else {
-      index.sources.push(sourceEntry);
+      sources.push(sourceEntry);
     }
-    index.lastUpdated = new Date().toISOString();
-    await fs.writeJson(indexPath, index, { spaces: 2 });
+    await fs.writeJson(sourcesIndexPath, sources, { spaces: 2 });
   }
 
-  async extractConcepts() {
+  async extractConcepts(): Promise<void> {
     const client = new LLMClient(this.config);
     const lang = this.config.getLanguage();
     const isZh = lang === 'zh';
@@ -409,7 +395,7 @@ Format:
 **Term**: definition`;
 
     // Collect all unique concepts from sources
-    const allConcepts = new Map();
+    const allConcepts = new Map<string, Concept>();
 
     for (const source of this.sources) {
       for (const concept of source.concepts || []) {
@@ -421,7 +407,7 @@ Format:
             relatedConcepts: []
           });
         }
-        allConcepts.get(key).sources.push(source.id);
+        allConcepts.get(key)!.sources.push(source.id);
       }
     }
 
@@ -433,7 +419,7 @@ Format:
 
     // Generate definitions for key concepts
     try {
-      const conceptTerms = Array.from(allConcepts.keys()).slice(0, 20);
+      const conceptTerms = Array.from(allConcepts.keys()).slice(0, MAX_CONCEPT_DEFINITIONS);
       const message = await client.createMessage({
         model: this.config.getModel(),
         max_tokens: 2000,
@@ -456,20 +442,18 @@ Format:
           const term = match[1].trim().toLowerCase();
           const def = match[2].trim();
           if (allConcepts.has(term)) {
-            allConcepts.get(term).definition = def;
+            allConcepts.get(term)!.definition = def;
           }
         }
       }
     } catch (err) {
-      console.log(chalk.yellow(`  ⚠ Failed to get concept definitions: ${err.message}`));
+      console.log(chalk.yellow(`  ⚠ Failed to get concept definitions: ${(err as Error).message}`));
     }
 
     this.concepts = Array.from(allConcepts.values());
   }
 
-  async buildRelationships() {
-    const client = new LLMClient(this.config);
-
+  async buildRelationships(): Promise<void> {
     // For each source, find related sources based on shared concepts
     for (const source of this.sources) {
       const related = this.sources
@@ -504,21 +488,15 @@ Format:
     }
   }
 
-  async writeWikiFiles(wikiDir) {
-    // Write summary files (same structure as writeSourceFile)
+  async writeWikiFiles(wikiDir: string): Promise<void> {
+    // Write summary files (flat structure by type, using ID)
     for (const source of this.sources) {
-      const pathParts = source.path.split('/');
-      let summaryPath;
-      if (pathParts.length >= 2) {
-        const type = pathParts[0];
-        const timestamp = pathParts[1];
-        const filename = pathParts[pathParts.length - 1];
-        const summaryDir = path.join(wikiDir, 'summaries', type, timestamp);
-        await fs.ensureDir(summaryDir);
-        summaryPath = path.join(summaryDir, filename);
-      } else {
-        summaryPath = path.join(wikiDir, 'summaries', `${source.id}.md`);
-      }
+      const type = source.type;
+      const titleSlug = slugify(source.title);
+      const summaryDir = path.join(wikiDir, 'summaries', type);
+      await fs.ensureDir(summaryDir);
+      const summaryPath = path.join(summaryDir, `${titleSlug}.md`);
+
       const contentToStore = source.compressedContent || source.content || '';
       const content = matter.stringify(contentToStore, {
         id: source.id,
@@ -526,8 +504,7 @@ Format:
         type: source.type,
         summary: source.summary || '',
         concepts: source.concepts || [],
-        backlinks: source.backlinks || [],
-        addedAt: source.addedAt
+        backlinks: source.backlinks || []
       });
       await fs.writeFile(summaryPath, content);
     }
@@ -535,10 +512,9 @@ Format:
     // Write concept files
     for (const concept of this.concepts) {
       if (!concept.definition) continue;
-      const slug = concept.term.toLowerCase().replace(/\s+/g, '-');
+      const slug = slugify(concept.term);
       const conceptPath = path.join(wikiDir, 'concepts', `${slug}.md`);
       const content = matter.stringify(concept.definition, {
-        id: concept.term,
         term: concept.term,
         sources: concept.sources,
         relatedConcepts: concept.relatedConcepts
@@ -546,14 +522,4 @@ Format:
       await fs.writeFile(conceptPath, content);
     }
   }
-
-  generateId() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-      const r = Math.random() * 16 | 0;
-      const v = c === 'x' ? r : (r & 0x3 | 0x8);
-      return v.toString(16);
-    });
-  }
 }
-
-module.exports = { MakeCommand };

@@ -1,14 +1,14 @@
-const fs = require('fs-extra');
-const path = require('path');
-const matter = require('gray-matter');
+import * as fs from 'fs-extra';
+import * as path from 'path';
+import chalk from 'chalk';
+import matter from 'gray-matter';
+import { Skill } from '../types';
 
-class SkillManager {
-  constructor() {
-    this.skills = [];
-    this.loaded = false;
-  }
+export class SkillManager {
+  private skills: Skill[] = [];
+  private loaded: boolean = false;
 
-  async loadSkills(kbDir) {
+  async loadSkills(kbDir: string): Promise<this> {
     if (this.loaded) return this;
 
     const skillsDir = path.join(kbDir, '.fina', 'skills');
@@ -30,13 +30,12 @@ class SkillManager {
     return this;
   }
 
-  async loadSkillFile(filePath) {
+  private async loadSkillFile(filePath: string): Promise<void> {
     try {
       const content = await fs.readFile(filePath, 'utf-8');
       const parsed = matter(content);
       if (!parsed.data.name) return;
 
-      // Extract patterns from description (Claude Code compatible)
       const patterns = this.extractPatterns(parsed.data.description || '');
 
       this.skills.push({
@@ -49,26 +48,25 @@ class SkillManager {
       });
     } catch (err) {
       // Skip invalid skill files
+      console.log(chalk.yellow(`  Skipping invalid skill file: ${filePath}`));
     }
   }
 
-  extractPatterns(description) {
-    const patterns = [];
-    // Match URL patterns: https://mp.weixin.qq.com/* or *://example.com/*
+  private extractPatterns(description: string): string[] {
+    const patterns: string[] = [];
     const urlPatternRegex = /(?:URL[\s:：匹配]+|[\s\(\[])(https?:\/\/\S+|\*:\/\/\S+)/gi;
     let match;
     while ((match = urlPatternRegex.exec(description)) !== null) {
       patterns.push(match[1]);
     }
-    // Match domain patterns: mp.weixin.qq.com/* or *://example.com/*
     const domainPatternRegex = /(?:[\s\(\[]|URL[\s:：匹配]+)([\w\.\-]+\/\*)/gi;
     while ((match = domainPatternRegex.exec(description)) !== null) {
       patterns.push(match[1]);
     }
-    return [...new Set(patterns)]; // deduplicate
+    return [...new Set(patterns)];
   }
 
-  matchSkill(url) {
+  matchSkill(url: string): Skill | null {
     for (const skill of this.skills) {
       for (const pattern of skill.patterns) {
         if (this.matchPattern(pattern, url)) {
@@ -79,25 +77,20 @@ class SkillManager {
     return null;
   }
 
-  matchPattern(pattern, url) {
-    // If pattern is a full URL or contains wildcards
+  private matchPattern(pattern: string, url: string): boolean {
     if (pattern.includes('*')) {
       const regex = this.globToRegex(pattern);
       return regex.test(url);
     }
-    // Otherwise do substring match
     return url.includes(pattern);
   }
 
-  globToRegex(pattern) {
-    // Escape special regex chars except *
+  private globToRegex(pattern: string): RegExp {
     const escaped = pattern
       .replace(/[.+?${}()|[\]\\]/g, '\\$&')
       .replace(/\*\*/g, '<<<DOUBLE_STAR>>>')
       .replace(/\*/g, '<<<STAR>>>');
 
-    // Handle single star at the end of a path segment (match anything after)
-    // But "/*" at the end of URL should match everything including slashes
     const isUrlPattern = pattern.startsWith('http') && pattern.endsWith('*');
 
     let result = escaped
@@ -107,5 +100,3 @@ class SkillManager {
     return new RegExp(`^${result}$`, 'i');
   }
 }
-
-module.exports = { SkillManager };

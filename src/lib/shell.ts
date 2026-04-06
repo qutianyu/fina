@@ -1,9 +1,11 @@
-const readline = require('readline');
-const chalk = require('chalk');
-const { AddCommand } = require('../commands/add.js');
-const { MakeCommand } = require('../commands/make.js');
-const { StatusCommand } = require('../commands/status.js');
-const { QueryCommand } = require('../commands/query.js');
+import * as readline from 'readline';
+import chalk from 'chalk';
+import { AddCommand } from '../commands/add';
+import { MakeCommand } from '../commands/make';
+import { StatusCommand } from '../commands/status';
+import { QueryCommand } from '../commands/query';
+import { ConfigManager } from './config';
+import { SkillManager } from './skills';
 
 const COMMANDS = [
   { name: '/add', description: 'Add URL or local file' },
@@ -14,16 +16,19 @@ const COMMANDS = [
   { name: '/exit', description: 'Exit shell' },
 ];
 
-class Shell {
-  constructor(config, skillManager = null) {
+export class Shell {
+  private config: ConfigManager;
+  private skillManager: SkillManager | null;
+  private running: boolean = true;
+  private history: string[] = [];
+  private historyIndex: number = -1;
+
+  constructor(config: ConfigManager, skillManager: SkillManager | null = null) {
     this.config = config;
     this.skillManager = skillManager;
-    this.running = true;
-    this.history = [];
-    this.historyIndex = -1;
   }
 
-  printBanner() {
+  printBanner(): void {
     console.log(chalk.cyan(`
 ╔═══════════════════════════════════════════════════════════════╗
 ║                       Fina CLI                                 ║
@@ -38,7 +43,7 @@ class Shell {
     console.log();
   }
 
-  async handleCommand(input) {
+  async handleCommand(input: string): Promise<void> {
     const trimmed = input.trim();
 
     if (trimmed === '/exit' || trimmed === '/quit' || trimmed === 'exit' || trimmed === 'quit') {
@@ -101,18 +106,16 @@ class Shell {
       return;
     }
 
-    // Unknown command
     if (trimmed.startsWith('/')) {
       console.log(chalk.yellow(`Unknown command: ${trimmed.split(' ')[0]}. Type /help for available commands.`));
       return;
     }
 
-    // Treat as a question
     const cmd = new QueryCommand(this.config);
     await cmd.execute(trimmed);
   }
 
-  async start() {
+  async start(): Promise<void> {
     this.printBanner();
 
     const rl = readline.createInterface({
@@ -124,25 +127,18 @@ class Shell {
     readline.emitKeypressEvents(process.stdin);
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(true);
-      // Disable terminal's interpretation of special characters like &, !, etc.
-      try {
-        const tty = require('tty');
-        if (tty.isatty()) {
-          // Try to disable character echoing of special chars
-        }
-      } catch (e) {}
     }
 
     let input = '';
 
-    const printInput = () => {
+    const printInput = (): void => {
       process.stdout.write('\r\x1b[K');
       process.stdout.write(chalk.cyan('fina > ') + input);
     };
 
     printInput();
 
-    const cleanup = () => {
+    const cleanup = (): void => {
       if (process.stdin.isTTY) {
         process.stdin.setRawMode(false);
       }
@@ -189,25 +185,22 @@ class Shell {
           return;
         }
 
-        // Ctrl+U: clear line
         if (key.ctrl && key.name === 'u') {
           process.stdout.write('\r\x1b[K');
           input = '';
           return;
         }
 
-        // Ctrl+K: kill from cursor to end of line
         if (key.ctrl && key.name === 'k') {
           const spaces = input.length;
           input = '';
           for (let i = 0; i < spaces; i++) {
             process.stdout.write(' ');
           }
-          readline.moveCursor(process.stdin, -spaces);
+          readline.moveCursor(process.stdin, -spaces, 0);
           return;
         }
 
-        // Up arrow: history previous
         if (key.name === 'up') {
           if (this.history.length === 0) return;
           if (this.historyIndex === -1) {
@@ -221,7 +214,6 @@ class Shell {
           return;
         }
 
-        // Down arrow: history next
         if (key.name === 'down') {
           if (this.historyIndex === -1) return;
           this.historyIndex++;
@@ -248,5 +240,3 @@ class Shell {
     });
   }
 }
-
-module.exports = { Shell };

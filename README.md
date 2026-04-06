@@ -1,5 +1,7 @@
 # Fina
 
+[中文版](README_zh.md)
+
 **Fina** is a personal AI Knowledge Base CLI, inspired by Andrej Karpathy's vision of building a "second brain" with LLMs.
 
 Following Karpathy's insight that *"LLMs are the new operating system"*, Fina acts as the interface layer between you and your personal knowledge OS. It transforms raw materials—URLs, documents, code—into a queryable wiki, enabling infinite-context search and AI-powered Q&A over everything you've collected.

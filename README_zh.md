@@ -1,5 +1,7 @@
 # Fina
 
+[English version](README.md)
+
 **Fina** 是一个个人 AI 知识库命令行工具，受 Andrej Karpathy "第二大脑" 愿景的启发。
 
 遵循 Karpathy 的观点——*"LLM 是新的操作系统"*，Fina 作为你与个人知识 OS 之间的接口层。它将原始材料（URL、文档、代码）转换成可查询的 wiki，实现无限上下文的搜索和 AI 驱动的问答。

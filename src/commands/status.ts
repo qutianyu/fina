@@ -1,13 +1,16 @@
-const fs = require('fs-extra');
-const path = require('path');
-const chalk = require('chalk');
+import * as fs from 'fs-extra';
+import * as path from 'path';
+import chalk from 'chalk';
+import { ConfigManager } from '../lib/config';
 
-class StatusCommand {
-  constructor(config) {
+export class StatusCommand {
+  private config: ConfigManager;
+
+  constructor(config: ConfigManager) {
     this.config = config;
   }
 
-  async execute() {
+  async execute(): Promise<void> {
     const rawDir = this.config.getRawDir();
     const wikiDir = this.config.getWikiDir();
 
@@ -16,22 +19,22 @@ class StatusCommand {
     await this.countDirectory(rawDir);
 
     console.log(chalk.gray('\nWiki:'));
-    // Wiki has summaries/ and concepts/ structure, count files recursively
     const wikiEmpty = await this.countWikiDirectory(wikiDir);
     if (wikiEmpty) {
       console.log(chalk.gray('  (empty)'));
     }
 
-    // Check for index
-    const indexPath = path.join(wikiDir, 'index.json');
-    if (await fs.pathExists(indexPath)) {
-      const index = await fs.readJson(indexPath);
+    const sourcesIndexPath = path.join(wikiDir, 'sources-index.json');
+    const conceptsIndexPath = path.join(wikiDir, 'concepts-index.json');
+
+    if (await fs.pathExists(sourcesIndexPath)) {
+      const sources = await fs.readJson(sourcesIndexPath) as any[];
+      const concepts = await fs.pathExists(conceptsIndexPath)
+        ? await fs.readJson(conceptsIndexPath) as any[]
+        : [];
       console.log(chalk.gray('\nKnowledge Base:'));
-      console.log(chalk.green(`  Sources indexed: ${index.sources?.length || 0}`));
-      console.log(chalk.green(`  Concepts defined: ${index.concepts?.length || 0}`));
-      if (index.lastUpdated) {
-        console.log(chalk.gray(`  Last compiled: ${new Date(index.lastUpdated).toLocaleString()}`));
-      }
+      console.log(chalk.green(`  Sources indexed: ${sources.length}`));
+      console.log(chalk.green(`  Concepts defined: ${concepts.length}`));
     } else {
       console.log(chalk.yellow('\n⚠ Wiki not yet compiled. Run /make to build it.'));
     }
@@ -39,20 +42,18 @@ class StatusCommand {
     console.log();
   }
 
-  async countDirectory(dir) {
+  private async countDirectory(dir: string): Promise<void> {
     if (!await fs.pathExists(dir)) {
       console.log(chalk.gray('  (empty)'));
       return;
     }
 
-    // For raw directories: count files in articles/documents/code/images
-    const rawSubdirs = ['articles', 'documents', 'code', 'images'];
+    const rawSubdirs = ['articles', 'code', 'images'];
     let total = 0;
 
     for (const subdir of rawSubdirs) {
       const subdirPath = path.join(dir, subdir);
       if (await fs.pathExists(subdirPath)) {
-        // Count files recursively
         const count = await this.countFilesRecursive(subdirPath);
         if (count > 0) {
           console.log(chalk.white(`  ${subdir}: ${count}`));
@@ -68,7 +69,7 @@ class StatusCommand {
     }
   }
 
-  async countFilesRecursive(dir) {
+  private async countFilesRecursive(dir: string): Promise<number> {
     let count = 0;
     const items = await fs.readdir(dir, { withFileTypes: true });
     for (const item of items) {
@@ -82,10 +83,9 @@ class StatusCommand {
     return count;
   }
 
-  async countWikiDirectory(dir) {
+  private async countWikiDirectory(dir: string): Promise<boolean> {
     let total = 0;
 
-    // Count summaries
     const summariesPath = path.join(dir, 'summaries');
     if (await fs.pathExists(summariesPath)) {
       const count = await this.countFilesRecursive(summariesPath);
@@ -95,7 +95,6 @@ class StatusCommand {
       }
     }
 
-    // Count concepts
     const conceptsPath = path.join(dir, 'concepts');
     if (await fs.pathExists(conceptsPath)) {
       const files = await fs.readdir(conceptsPath);
@@ -109,5 +108,3 @@ class StatusCommand {
     return total === 0;
   }
 }
-
-module.exports = { StatusCommand };
