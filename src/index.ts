@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import * as fs from 'fs-extra';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import { ConfigManager } from './lib/config';
 import { Shell } from './lib/shell';
 import { SkillManager } from './lib/skills';
@@ -12,12 +13,15 @@ import { MakeCommand } from './commands/make';
 import { StatusCommand } from './commands/status';
 import { QueryCommand } from './commands/query';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const pkg = fs.readJsonSync(path.join(__dirname, '..', 'package.json'));
+
 const program = new Command();
 
 program
   .name('Fina')
   .description('AI Knowledge Base CLI - Transform raw materials into a queryable wiki')
-  .version('0.1.1');
+  .version(pkg.version);
 
 program
   .command('init')
@@ -108,6 +112,8 @@ program
     }
     const skillManager = new SkillManager();
     await skillManager.loadSkills(config.getKnowledgeBaseDir());
+
+    // Use Shell for interactive mode
     const shell = new Shell(config, skillManager);
     await shell.start();
   });
@@ -175,6 +181,8 @@ program
     }
     const skillManager = new SkillManager();
     await skillManager.loadSkills(config.getKnowledgeBaseDir());
+
+    // Use Shell for interactive mode
     const shell = new Shell(config, skillManager);
     await shell.start();
   });
@@ -186,6 +194,8 @@ if (process.argv.length === 2) {
     await config.load();
     const skillManager = new SkillManager();
     await skillManager.loadSkills(config.getKnowledgeBaseDir());
+
+    // Use Shell for interactive mode
     const shell = new Shell(config, skillManager);
     await shell.start();
   })();

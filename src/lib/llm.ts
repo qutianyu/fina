@@ -11,6 +11,8 @@ export interface LLMResponse {
   content: Array<{ text: string }>;
 }
 
+export type StreamingCallback = (text: string) => void;
+
 export class LLMClient {
   private config: ConfigManager;
   private type: string;
@@ -97,5 +99,70 @@ export class LLMClient {
 
     const textContent = result.content.find((b: any) => b.type === 'text');
     return { content: [{ text: (textContent as any)?.text || '' }] } as LLMResponse;
+  }
+
+  async createMessageStream({ model, max_tokens, messages, onChunk }: {
+    model?: string;
+    max_tokens?: number;
+    messages: LLMMessage[];
+    onChunk: StreamingCallback;
+  }): Promise<void> {
+    if (this.config.debug) {
+      console.log('\n========== LLM INPUT ==========');
+      for (const msg of messages) {
+        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+        console.log(`[${msg.role}]`, content.substring(0, 500) + (content.length > 500 ? '...' : ''));
+      }
+      console.log('===============================\n');
+    }
+
+    if (this.type === 'openai') {
+      const openAIClient = this.client as OpenAI;
+      const stream = await openAIClient.chat.completions.create({
+        model: model || this.config.getModel(),
+        max_tokens: max_tokens || 1500,
+        stream: true,
+        messages: messages.map(m => ({
+          role: m.role as 'user' | 'assistant' | 'system',
+          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+        }))
+      });
+
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content;
+        if (content) {
+          onChunk(content);
+        }
+      }
+      return;
+    }
+
+    const anthropicClient = this.client as Anthropic;
+
+    // Separate system messages from user/assistant messages for Anthropic
+    const systemMessages = messages.filter(m => m.role === 'system');
+    const otherMessages = messages.filter(m => m.role !== 'system');
+    const systemContent = systemMessages.map(m =>
+      typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+    ).join('\n');
+
+    const stream = await anthropicClient.messages.stream({
+      model: model || this.config.getModel(),
+      max_tokens: max_tokens || 1500,
+      system: systemContent || undefined,
+      messages: otherMessages.map(m => ({
+        role: m.role as 'user' | 'assistant',
+        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+      }))
+    });
+
+    for await (const chunk of stream) {
+      if (chunk.type === 'content_block_delta') {
+        const text = (chunk as any).delta?.text;
+        if (text) {
+          onChunk(text);
+        }
+      }
+    }
   }
 }

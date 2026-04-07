@@ -169,11 +169,20 @@ Output ONLY the cleaned content, nothing else. Do not add explanations or notes.
       if (useTimestampDir) {
         const timestamp = Date.now();
         const dir = path.join(targetDir, String(timestamp));
-        await fs.ensureDir(dir);
         destPath = path.join(dir, path.basename(resolvedPath));
       } else {
-        await fs.ensureDir(targetDir);
         destPath = path.join(targetDir, path.basename(resolvedPath));
+      }
+
+      // Validate destination is within KB
+      this.config.validateWrite(destPath);
+
+      if (useTimestampDir) {
+        const timestamp = Date.now();
+        const dir = path.join(targetDir, String(timestamp));
+        await fs.ensureDir(dir);
+      } else {
+        await fs.ensureDir(targetDir);
       }
       await fs.copy(resolvedPath, destPath);
 

@@ -11,6 +11,7 @@ const COMMANDS = [
   { name: '/add', description: 'Add URL or local file' },
   { name: '/batch-add', description: 'Add all files from a directory' },
   { name: '/make', description: 'Compile/refresh wiki' },
+  { name: '/open', description: 'Direct chat (no wiki needed)' },
   { name: '/status', description: 'Show stats' },
   { name: '/search', description: 'Search wiki' },
   { name: '/exit', description: 'Exit shell' },
@@ -83,6 +84,18 @@ export class Shell {
     if (trimmed === '/make') {
       const cmd = new MakeCommand(this.config);
       await cmd.execute();
+      return;
+    }
+
+    if (trimmed.startsWith('/open ')) {
+      const query = trimmed.slice(6).trim();
+      const cmd = new QueryCommand(this.config);
+      await cmd.executeDirect(query);
+      return;
+    }
+
+    if (trimmed === '/open') {
+      console.log(chalk.gray('Usage: /open <your question>'));
       return;
     }
 

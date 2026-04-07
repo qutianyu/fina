@@ -1,5 +1,6 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
+import chalk from 'chalk';
 import { Config } from '../types';
 
 export class ConfigManager {
@@ -123,5 +124,30 @@ export class ConfigManager {
       return false;
     }
     return true;
+  }
+
+  isPathWithinKnowledgeBase(filePath: string): boolean {
+    const kbDir = this.getKnowledgeBaseDir();
+    const resolvedPath = path.resolve(filePath);
+    const resolvedKbDir = path.resolve(kbDir);
+    return resolvedPath.startsWith(resolvedKbDir + path.sep) || resolvedPath === resolvedKbDir;
+  }
+
+  validatePath(filePath: string): void {
+    if (!this.isPathWithinKnowledgeBase(filePath)) {
+      const kbDir = this.getKnowledgeBaseDir();
+      console.log(chalk.red(`\n⛔ Access denied: Path '${filePath}' is outside the knowledge base directory.`));
+      console.log(chalk.red(`   Knowledge base: ${kbDir}`));
+      console.log(chalk.red(`   Only files within the knowledge base directory can be accessed.`));
+      throw new Error(`Access denied: Path '${filePath}' is outside knowledge base '${kbDir}'`);
+    }
+  }
+
+  validateRead(filePath: string): void {
+    this.validatePath(filePath);
+  }
+
+  validateWrite(filePath: string): void {
+    this.validatePath(filePath);
   }
 }

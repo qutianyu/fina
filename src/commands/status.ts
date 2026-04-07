@@ -14,6 +14,10 @@ export class StatusCommand {
     const rawDir = this.config.getRawDir();
     const wikiDir = this.config.getWikiDir();
 
+    // Validate paths are within KB
+    this.config.validateRead(rawDir);
+    this.config.validateRead(wikiDir);
+
     console.log(chalk.cyan('\n📊 Fina Status\n'));
     console.log(chalk.gray('Raw Materials:'));
     await this.countDirectory(rawDir);

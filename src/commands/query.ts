@@ -34,6 +34,9 @@ export class QueryCommand {
       return;
     }
 
+    // Validate read paths are within KB
+    this.config.validateRead(sourcesIndexPath);
+
     if (!await fs.pathExists(sourcesIndexPath)) {
       console.log(chalk.yellow('Wiki not yet compiled. Run /make first.'));
       return;
@@ -70,25 +73,134 @@ export class QueryCommand {
     try {
       console.log(chalk.gray('Thinking...\n'));
 
-      const message = await client.createMessage({
+      let fullResponse = '';
+      let currentLines = 0;
+      let pendingThink = ''; // Accumulate text that might be inside a think block
+      let inThinkBlock = false;
+
+      await client.createMessageStream({
         model: this.config.getModel(),
         max_tokens: 1500,
         messages: [{
           role: 'user',
           content: `${systemPrompt}\n\nQuestion: ${question}\n\nContext:\n${context}\n\nAnswer the question based on the context above. At the end of your answer, cite the sources using their full file paths in this format:\n**来源**: [标题](绝对路径)\n\nIf you are unsure, say so.`
-        }]
+        }],
+        onChunk: (text) => {
+          fullResponse += text;
+          pendingThink += text;
+
+          // Check if we have a complete think block
+          const thinkMatch = pendingThink.match(/<think>[\s\S]*?<\/think>/);
+          if (thinkMatch) {
+            // Found complete think block, remove it from pending and displayText
+            pendingThink = pendingThink.replace(/<think>[\s\S]*?<\/think>/g, '');
+            inThinkBlock = false;
+          } else if (pendingThink.includes('<think>') && !pendingThink.includes('</think>')) {
+            // We're inside a think block but it hasn't closed yet
+            inThinkBlock = true;
+            return; // Don't display anything yet
+          }
+
+          // Remove any remaining think blocks and render markdown
+          let displayText = this.stripMarkdown(fullResponse);
+          const newLines = displayText.split('\n').length;
+
+          // Move cursor back to start position
+          if (currentLines > 0) {
+            process.stdout.write('\x1b[' + currentLines + 'A');
+          }
+          process.stdout.write('\r');
+
+          // Clear from current position to end of screen
+          process.stdout.write('\x1b[0J');
+
+          // Output all content
+          process.stdout.write(displayText);
+
+          currentLines = newLines;
+        }
       });
 
-      let response = message.content[0].text;
-      // Strip thinking blocks
-      const thinkIdx = response.lastIndexOf('</think>');
-      if (thinkIdx >= 0) {
-        response = response.substring(thinkIdx + 9).trim();
-      }
-      response = response.replace(/<think>/g, '').replace(/<\/think>/g, '').trim();
+      console.log();
 
-      const plainText = this.stripMarkdown(response);
-      console.log(chalk.white(plainText));
+    } catch (err) {
+      console.log(chalk.red(`Query failed: ${(err as Error).message}`));
+    }
+  }
+
+  async executeDirect(question: string): Promise<void> {
+    if (!question) {
+      console.log(chalk.red('Please provide a question.'));
+      return;
+    }
+
+    if (!await this.config.ensureConfigured()) {
+      return;
+    }
+
+    console.log(chalk.cyan(`\n🤔 ${question}\n`));
+
+    const client = new LLMClient(this.config);
+    const lang = this.config.getLanguage();
+    const isZh = lang === 'zh';
+
+    const systemPrompt = isZh
+      ? '你是一个有用的AI助手，请用中文回答用户的问题。'
+      : 'You are a helpful AI assistant. Answer the user question in a helpful way.';
+
+    try {
+      console.log(chalk.gray('Thinking...\n'));
+
+      let fullResponse = '';
+      let currentLines = 0;
+      let pendingThink = '';
+      let inThinkBlock = false;
+
+      await client.createMessageStream({
+        model: this.config.getModel(),
+        max_tokens: 1500,
+        messages: [{
+          role: 'system',
+          content: systemPrompt
+        }, {
+          role: 'user',
+          content: question
+        }],
+        onChunk: (text) => {
+          fullResponse += text;
+          pendingThink += text;
+
+          // Check if we have a complete think block
+          const thinkMatch = pendingThink.match(/<think>[\s\S]*?<\/think>/);
+          if (thinkMatch) {
+            pendingThink = pendingThink.replace(/<think>[\s\S]*?<\/think>/g, '');
+            inThinkBlock = false;
+          } else if (pendingThink.includes('<think>') && !pendingThink.includes('</think>')) {
+            inThinkBlock = true;
+            return;
+          }
+
+          // Remove any remaining think blocks and render markdown
+          let displayText = this.stripMarkdown(fullResponse);
+          const newLines = displayText.split('\n').length;
+
+          // Move cursor back to start position
+          if (currentLines > 0) {
+            process.stdout.write('\x1b[' + currentLines + 'A');
+          }
+          process.stdout.write('\r');
+
+          // Clear from current position to end of screen
+          process.stdout.write('\x1b[0J');
+
+          // Output all content
+          process.stdout.write(displayText);
+
+          currentLines = newLines;
+        }
+      });
+
+      console.log();
 
     } catch (err) {
       console.log(chalk.red(`Query failed: ${(err as Error).message}`));
@@ -225,6 +337,9 @@ If no relevant articles found, return empty array: []`;
       const titleSlug = slugify(source.title);
       const summaryPath = path.join(wikiDir, 'summaries', source.type, `${titleSlug}.md`);
 
+      // Validate path is within KB
+      this.config.validateRead(summaryPath);
+
       if (await fs.pathExists(summaryPath)) {
         const content = await fs.readFile(summaryPath, 'utf-8');
         const parsed = matter(content);
@@ -247,6 +362,8 @@ If no relevant articles found, return empty array: []`;
 
       if (allConcepts.size > 0) {
         const conceptsIndexPath = path.join(wikiDir, 'concepts-index.json');
+        this.config.validateRead(conceptsIndexPath);
+
         if (await fs.pathExists(conceptsIndexPath)) {
           const concepts = await fs.readJson(conceptsIndexPath) as Concept[];
           contexts.push('\n## Relevant Concepts\n');
@@ -263,38 +380,102 @@ If no relevant articles found, return empty array: []`;
   }
 
   private stripMarkdown(text: string): string {
+    // Remove think blocks first (before any other processing)
+    text = text.replace(/<think>[\s\S]*?<\/think>/g, '');
+
     // Process tables first (they span multiple lines)
-    text = this.stripTables(text);
+    text = this.renderTables(text);
 
-    return text
-      // Remove code blocks
-      .replace(/```[\s\S]*?```/g, '')
-      .replace(/`([^`]+)`/g, '$1')
-      // Remove headers
-      .replace(/^#{1,6}\s+/gm, '')
-      // Remove bold/italic
-      .replace(/\*\*([^*]+)\*\*/g, '$1')
-      .replace(/\*([^*]+)\*/g, '$1')
-      .replace(/__([^_]+)__/g, '$1')
-      .replace(/_([^_]+)_/g, '$1')
-      // Remove links but keep text and URL
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
-      // Remove images but keep URL
-      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '[$1]($2)')
-      // Remove blockquotes
-      .replace(/^>\s*/gm, '')
-      // Remove horizontal rules
-      .replace(/^[-*_]{3,}$/gm, '')
-      // Clean up extra whitespace
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
-  }
-
-  private stripTables(text: string): string {
     const lines = text.split('\n');
     const result: string[] = [];
+    let inCodeBlock = false;
+    let inList = false;
+    let listIndex = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      // Code block handling
+      if (line.startsWith('```')) {
+        if (!inCodeBlock) {
+          inCodeBlock = true;
+          result.push('');
+        } else {
+          inCodeBlock = false;
+          result.push('');
+        }
+        continue;
+      }
+
+      if (inCodeBlock) {
+        result.push('  ' + line);
+        continue;
+      }
+
+      // Headers - add underline
+      const headerMatch = line.match(/^(#{1,6})\s+(.+)/);
+      if (headerMatch) {
+        const level = headerMatch[1].length;
+        const content = headerMatch[2];
+        const underlineChar = level === 1 ? '=' : level === 2 ? '-' : '~';
+        result.push('');
+        result.push(content);
+        result.push(underlineChar.repeat(Math.min(content.length, 40)));
+        result.push('');
+        continue;
+      }
+
+      // List items
+      const listMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(.+)/);
+      if (listMatch) {
+        const indent = listMatch[1].length;
+        const marker = listMatch[2];
+        const content = listMatch[3];
+
+        if (marker.match(/\d+\./)) {
+          result.push('  '.repeat(indent) + content);
+        } else {
+          result.push('  '.repeat(indent) + '• ' + content);
+        }
+        continue;
+      }
+
+      // Horizontal rule
+      if (line.match(/^[-*_]{3,}$/)) {
+        result.push('─'.repeat(40));
+        continue;
+      }
+
+      // Blockquotes
+      const quoteMatch = line.match(/^>\s*(.*)/);
+      if (quoteMatch) {
+        result.push('│ ' + quoteMatch[1]);
+        continue;
+      }
+
+      // Regular text - process inline formatting
+      let processed = line
+        .replace(/`([^`]+)`/g, '$1')
+        .replace(/\*\*([^*]+)\*\*/g, '$1')
+        .replace(/\*([^*]+)\*/g, '$1')
+        .replace(/__([^_]+)__/g, '$1')
+        .replace(/_([^_]+)_/g, '$1')
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1');
+
+      if (processed.trim()) {
+        result.push(processed);
+      }
+    }
+
+    return result.join('\n');
+  }
+
+  private renderTables(text: string): string {
+    const lines = text.split('\n');
+    const result: string[] = [];
+    let rows: string[][] = [];
+    let colWidths: number[] = [];
     let inTable = false;
-    let separatorSeen = false;
 
     for (const line of lines) {
       // Check if this is a table row (starts with | and ends with |)
@@ -304,7 +485,6 @@ If no relevant articles found, return empty array: []`;
         inTable = true;
         // Skip separator line (|---|---|)
         if (/^\|[-:\s]+\|[-:\s\|\s]*$/.test(line.trim())) {
-          separatorSeen = true;
           continue;
         }
 
@@ -315,18 +495,58 @@ If no relevant articles found, return empty array: []`;
           .map(cell => cell.trim())
           .filter(cell => cell.length > 0);
 
-        result.push(cells.join(' | '));
+        rows.push(cells);
+
+        // Update column widths
+        cells.forEach((cell, i) => {
+          const len = this.visibleLength(cell);
+          colWidths[i] = Math.max(colWidths[i] || 0, len);
+        });
       } else {
-        if (inTable && separatorSeen) {
-          // End of table, add separator line
+        if (inTable && rows.length > 0) {
+          // Render the table with borders
           result.push('');
+          this.renderTableRow(result, rows[0], colWidths, true);
+          result.push(colWidths.map(w => '─'.repeat(w)).join('─┼─'));
+          for (let i = 1; i < rows.length; i++) {
+            this.renderTableRow(result, rows[i], colWidths, false);
+          }
+          result.push('');
+          rows = [];
+          colWidths = [];
         }
         inTable = false;
-        separatorSeen = false;
         result.push(line);
       }
     }
 
+    // Handle table at end of text
+    if (inTable && rows.length > 0) {
+      result.push('');
+      this.renderTableRow(result, rows[0], colWidths, true);
+      result.push(colWidths.map(w => '─'.repeat(w)).join('─┼─'));
+      for (let i = 1; i < rows.length; i++) {
+        this.renderTableRow(result, rows[i], colWidths, false);
+      }
+      result.push('');
+    }
+
     return result.join('\n');
+  }
+
+  private visibleLength(str: string): number {
+    // Calculate visible length (strip ANSI codes)
+    return str.replace(/\x1b\[[0-9;]*m/g, '').length;
+  }
+
+  private renderTableRow(output: string[], cells: string[], widths: number[], isHeader: boolean): void {
+    const formatted = cells.map((cell, i) => {
+      const len = this.visibleLength(cell);
+      const pad = widths[i] - len;
+      return cell + ' '.repeat(pad);
+    });
+    const prefix = isHeader ? '│ ' : '│ ';
+    const suffix = ' │';
+    output.push(prefix + formatted.join(' │ ') + suffix);
   }
 }

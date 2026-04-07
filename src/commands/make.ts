@@ -13,6 +13,7 @@ export class MakeCommand {
   private config: ConfigManager;
   private sources: Source[] = [];
   private concepts: Concept[] = [];
+  private imageMap: Map<string, string> = new Map(); // filename -> relative path in wiki
 
   constructor(config: ConfigManager) {
     this.config = config;
@@ -28,13 +29,26 @@ export class MakeCommand {
     const rawDir = this.config.getRawDir();
     const wikiDir = this.config.getWikiDir();
 
+    // Validate paths are within knowledge base
+    this.config.validateRead(rawDir);
+    this.config.validateWrite(wikiDir);
+
     // Ensure wiki directories exist
     await fs.ensureDir(path.join(wikiDir, 'concepts'));
     await fs.ensureDir(path.join(wikiDir, 'summaries'));
+    await fs.ensureDir(path.join(wikiDir, 'images'));
+
+    // Step 0: Collect and copy images
+    console.log(chalk.gray('🖼️  Collecting images...'));
+    await this.collectAndCopyImages(rawDir, wikiDir);
 
     // Step 1: Collect all raw files
     console.log(chalk.gray('📁 Scanning raw materials...'));
     await this.collectRawFiles(rawDir);
+
+    // Fix image paths in source content
+    this.fixImagePaths();
+
     const totalChars = this.sources.reduce((sum, s) => sum + (s.content?.length || 0), 0);
     console.log(chalk.green(`  Found ${this.sources.length} sources (${totalChars} chars)`));
 
@@ -68,7 +82,67 @@ export class MakeCommand {
     console.log(chalk.gray(`  Concepts: ${this.concepts.length}`));
   }
 
+  async collectAndCopyImages(rawDir: string, wikiDir: string): Promise<void> {
+    const imagesDir = path.join(rawDir, 'images');
+    if (!await fs.pathExists(imagesDir)) {
+      return;
+    }
+
+    // Validate image source path
+    this.config.validateRead(imagesDir);
+
+    const wikiImagesDir = path.join(wikiDir, 'images');
+
+    // Walk through raw/images and copy all images to wiki/images
+    const copyImageDir = async (srcDir: string, destDir: string) => {
+      // Validate source directory
+      this.config.validateRead(srcDir);
+      this.config.validateWrite(destDir);
+
+      const items = await fs.readdir(srcDir, { withFileTypes: true });
+      for (const item of items) {
+        const srcPath = path.join(srcDir, item.name);
+        if (item.isDirectory()) {
+          await copyImageDir(srcPath, destDir);
+        } else if (item.isFile()) {
+          // Validate file paths
+          this.config.validateRead(srcPath);
+          this.config.validateWrite(path.join(destDir, item.name));
+
+          const ext = path.extname(item.name).toLowerCase();
+          if (['.jpg', '.jpeg', '.png', '.gif', '.svg', '.webp'].includes(ext)) {
+            await fs.copy(srcPath, path.join(destDir, item.name));
+            // Map filename to relative path in wiki (../images/ because articles are in summaries/article/)
+            this.imageMap.set(item.name, `../images/${item.name}`);
+          }
+        }
+      }
+    };
+
+    await copyImageDir(imagesDir, wikiImagesDir);
+    console.log(chalk.gray(`  Copied ${this.imageMap.size} images to wiki`));
+  }
+
+  fixImagePaths(): void {
+    if (this.imageMap.size === 0) return;
+
+    for (const source of this.sources) {
+      if (source.type !== 'article') continue;
+
+      let content = source.content || '';
+      for (const [filename, relativePath] of this.imageMap) {
+        // Match image references with just filename (not full paths)
+        const regex = new RegExp(`!\\[([^\\]]*)\\]\\(${filename}\\)`, 'g');
+        content = content.replace(regex, `![$1](${relativePath})`);
+      }
+      source.content = content;
+    }
+  }
+
   async collectRawFiles(dir: string): Promise<void> {
+    // Validate directory is within KB
+    this.config.validateRead(dir);
+
     const items = await fs.readdir(dir, { withFileTypes: true });
 
     for (const item of items) {
@@ -78,8 +152,10 @@ export class MakeCommand {
         // Recurse into all subdirectories (including timestamp-based dirs)
         await this.collectRawFiles(fullPath);
       } else if (item.isFile()) {
+        // Validate file path
+        this.config.validateRead(fullPath);
+
         const ext = path.extname(item.name).toLowerCase();
-        const stats = await fs.stat(fullPath);
 
         if (['.md', '.txt'].includes(ext)) {
           const content = await fs.readFile(fullPath, 'utf-8');
@@ -337,8 +413,12 @@ Format for each:
     const type = source.type; // 'articles' or 'code'
     const titleSlug = slugify(source.title);
     const summaryDir = path.join(wikiDir, 'summaries', type);
-    await fs.ensureDir(summaryDir);
     const summaryPath = path.join(summaryDir, `${titleSlug}.md`);
+
+    // Validate paths
+    this.config.validateWrite(summaryPath);
+
+    await fs.ensureDir(summaryDir);
 
     const contentToStore = source.compressedContent || source.content || '';
     const content = matter.stringify(contentToStore, {
@@ -353,6 +433,8 @@ Format for each:
 
     // Update sources-index.json incrementally
     const sourcesIndexPath = path.join(wikiDir, 'sources-index.json');
+    this.config.validateWrite(sourcesIndexPath);
+
     let sources: IndexedSource[] = [];
     if (await fs.pathExists(sourcesIndexPath)) {
       sources = await fs.readJson(sourcesIndexPath) as IndexedSource[];
@@ -494,8 +576,12 @@ Format:
       const type = source.type;
       const titleSlug = slugify(source.title);
       const summaryDir = path.join(wikiDir, 'summaries', type);
-      await fs.ensureDir(summaryDir);
       const summaryPath = path.join(summaryDir, `${titleSlug}.md`);
+
+      // Validate paths
+      this.config.validateWrite(summaryPath);
+
+      await fs.ensureDir(summaryDir);
 
       const contentToStore = source.compressedContent || source.content || '';
       const content = matter.stringify(contentToStore, {
