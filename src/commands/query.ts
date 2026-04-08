@@ -92,8 +92,10 @@ export class QueryCommand {
           // Check if we have a complete think block
           const thinkMatch = pendingThink.match(/<think>[\s\S]*?<\/think>/);
           if (thinkMatch) {
-            // Found complete think block, remove it from pending and displayText
+            // Found complete think block, remove it from pending
             pendingThink = pendingThink.replace(/<think>[\s\S]*?<\/think>/g, '');
+            // Also remove from fullResponse to prevent think content from being displayed
+            fullResponse = fullResponse.replace(/<think>[\s\S]*?<\/think>/g, '');
             inThinkBlock = false;
           } else if (pendingThink.includes('<think>') && !pendingThink.includes('</think>')) {
             // We're inside a think block but it hasn't closed yet
@@ -174,6 +176,7 @@ export class QueryCommand {
           const thinkMatch = pendingThink.match(/<think>[\s\S]*?<\/think>/);
           if (thinkMatch) {
             pendingThink = pendingThink.replace(/<think>[\s\S]*?<\/think>/g, '');
+            fullResponse = fullResponse.replace(/<think>[\s\S]*?<\/think>/g, '');
             inThinkBlock = false;
           } else if (pendingThink.includes('<think>') && !pendingThink.includes('</think>')) {
             inThinkBlock = true;
