@@ -1,0 +1,177 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 17% 98%;
+    --foreground: 220 20% 14%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 20% 14%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 20% 14%;
+    --primary: 222 89% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 220 20% 14%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 7% 46%;
+    --accent: 222 100% 94%;
+    --accent-foreground: 222 71% 45%;
+    --destructive: 0 75% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 8% 90%;
+    --input: 220 8% 90%;
+    --ring: 222 89% 60%;
+    --radius: 0.5rem;
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+
+    --fina-blue: 222 89% 60%;
+    --fina-blue-hover: 222 89% 55%;
+    --fina-bg: 210 17% 98%;
+    --fina-sidebar: 0 0% 99%;
+    --fina-hover: 220 11% 95%;
+    --fina-active: 222 100% 94%;
+    --fina-active-text: 222 71% 45%;
+    --fina-border: 220 8% 90%;
+    --fina-text: 220 20% 14%;
+    --fina-text-secondary: 220 13% 45%;
+    --fina-text-tertiary: 220 7% 57%;
+  }
+
+  .dark {
+    --background: 240 6% 10%;
+    --foreground: 220 14% 91%;
+    --card: 240 5% 13%;
+    --card-foreground: 220 14% 91%;
+    --popover: 240 5% 13%;
+    --popover-foreground: 220 14% 91%;
+    --primary: 217 91% 68%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 5% 17%;
+    --secondary-foreground: 220 14% 91%;
+    --muted: 240 5% 17%;
+    --muted-foreground: 220 10% 55%;
+    --accent: 217 91% 20%;
+    --accent-foreground: 217 91% 75%;
+    --destructive: 0 65% 45%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 240 4% 20%;
+    --input: 240 4% 20%;
+    --ring: 217 91% 68%;
+
+    --fina-blue: 217 91% 68%;
+    --fina-blue-hover: 217 91% 63%;
+    --fina-bg: 240 6% 10%;
+    --fina-sidebar: 240 5% 12%;
+    --fina-hover: 240 4% 16%;
+    --fina-active: 217 91% 18%;
+    --fina-active-text: 217 91% 75%;
+    --fina-border: 240 4% 20%;
+    --fina-text: 220 14% 91%;
+    --fina-text-secondary: 220 10% 62%;
+    --fina-text-tertiary: 220 8% 46%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+}
+
+html { scroll-behavior: smooth; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(var(--muted-foreground) / 0.2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.35); }
+
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes typing-dot { 0%, 60%, 100% { opacity: 0.3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-4px); } }
+
+.animate-fadeIn { animation: fadeIn 0.2s ease-out; }
+
+/* Doc content typography */
+.doc-content { @apply text-[15px] leading-[1.8]; color: hsl(var(--foreground)); }
+.doc-content h1 { @apply text-[28px] font-bold mt-10 mb-5 leading-tight; letter-spacing: -0.01em; }
+.doc-content h2 { @apply text-[22px] font-semibold mt-8 mb-4 leading-tight; padding-bottom: 0.5rem; border-bottom: 1px solid hsl(var(--border) / 0.6); }
+.doc-content h3 { @apply text-[18px] font-semibold mt-6 mb-3; }
+.doc-content p { @apply my-4 leading-[1.8]; }
+.doc-content a { color: hsl(var(--primary)); text-decoration: none; border-bottom: 1px solid hsl(var(--primary) / 0.3); }
+.doc-content ul, .doc-content ol { @apply my-4 pl-6; }
+.doc-content li { @apply my-1.5 leading-relaxed; }
+.doc-content ul { @apply list-disc; }
+.doc-content ol { @apply list-decimal; }
+.doc-content blockquote { @apply my-5 pl-4 py-2; border-left: 3px solid hsl(var(--primary) / 0.4); color: hsl(var(--muted-foreground)); background: hsl(var(--accent) / 0.3); border-radius: 0 4px 4px 0; }
+.doc-content code { @apply px-1.5 py-0.5 rounded text-[13px] font-mono; background: hsl(var(--muted)); color: hsl(var(--primary)); font-size: 0.9em; }
+.doc-content pre { @apply my-5 p-4 rounded-lg overflow-x-auto; background: hsl(var(--muted)); border: 1px solid hsl(var(--border)); }
+.doc-content pre code { @apply p-0 bg-transparent border-0; color: hsl(var(--foreground)); font-size: 13px; }
+.doc-content table { @apply w-full my-5 border-collapse; }
+.doc-content th, .doc-content td { @apply px-4 py-2.5 text-left text-sm border; border-color: hsl(var(--border)); }
+.doc-content th { @apply font-semibold text-xs; background: hsl(var(--secondary)); color: hsl(var(--muted-foreground)); text-transform: uppercase; letter-spacing: 0.05em; }
+.doc-content hr { @apply my-8; border: none; height: 1px; background: hsl(var(--border)); }
+.doc-content img { @apply max-w-full rounded-lg my-5; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+.doc-content a[data-wiki] { @apply inline-flex items-center gap-1 px-1.5 py-0.5 rounded; background: hsl(var(--accent)); color: hsl(var(--accent-foreground)); text-decoration: none; border-bottom: none; font-weight: 500; font-size: 0.95em; }
+.doc-content a[data-wiki]:hover { background: hsl(var(--primary) / 0.15); }
+
+/* Chat */
+.chat-bubble-user { @apply max-w-[80%] px-4 py-3 text-sm leading-relaxed; background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); border-radius: 16px 16px 4px 16px; }
+.chat-bubble-ai { @apply max-w-[80%] px-4 py-3 text-sm leading-relaxed; background: hsl(var(--card)); color: hsl(var(--foreground)); border: 1px solid hsl(var(--border)); border-radius: 16px 16px 16px 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+.typing-indicator { @apply flex gap-1 items-center px-4 py-3; }
+.typing-dot { @apply w-2 h-2 rounded-full; background: hsl(var(--muted-foreground)); animation: typing-dot 1.4s infinite both; }
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* Sidebar tree */
+.tree-item { @apply flex items-center gap-1.5 px-2 py-1 rounded-md text-[13px] cursor-pointer transition-all duration-150; color: hsl(var(--fina-text-secondary)); position: relative; }
+.tree-item:hover { background: hsl(var(--fina-hover)); color: hsl(var(--fina-text)); }
+.tree-item.active { background: hsl(var(--fina-active)); color: hsl(var(--fina-active-text)); }
+.tree-item.active::before { content: ''; position: absolute; left: 0; top: 4px; bottom: 4px; width: 3px; border-radius: 0 2px 2px 0; background: hsl(var(--fina-blue)); }
+.tree-item .toggle-icon { @apply w-3.5 h-3.5 transition-transform duration-150 flex-shrink-0; color: hsl(var(--fina-text-tertiary)); }
+.tree-item.expanded .toggle-icon { transform: rotate(90deg); }
+
+/* Layout helpers */
+.resize-handle { @apply w-1 h-full cursor-col-resize transition-colors duration-150 flex-shrink-0; background: transparent; }
+.resize-handle:hover { background: hsl(var(--fina-blue) / 0.2); }
+.resize-handle:active { background: hsl(var(--fina-blue) / 0.4); }
+.section-header { @apply px-3 py-2 text-[11px] font-semibold uppercase tracking-wider; color: hsl(var(--fina-text-tertiary)); }
+.search-input { @apply w-full pl-8 pr-3 py-1.5 text-[13px] rounded-md border transition-all duration-150; background: hsl(var(--secondary)); border-color: transparent; color: hsl(var(--foreground)); }
+.search-input:hover { border-color: hsl(var(--border)); }
+.search-input:focus { background: hsl(var(--card)); border-color: hsl(var(--primary)); box-shadow: 0 0 0 3px hsl(var(--primary) / 0.08); outline: none; }
+.search-input::placeholder { color: hsl(var(--fina-text-tertiary)); }
+.pill-switcher { @apply inline-flex items-center gap-0.5 p-1 rounded-lg; background: hsl(var(--secondary)); }
+.pill-switcher button { @apply px-3 py-1 rounded-md text-[13px] font-medium transition-all duration-150; color: hsl(var(--fina-text-tertiary)); }
+.pill-switcher button:hover { color: hsl(var(--fina-text-secondary)); }
+.pill-switcher button.active { background: hsl(var(--card)); color: hsl(var(--foreground)); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+
+/* Shimmer */
+.shimmer { background: linear-gradient(90deg, hsl(var(--muted)) 0%, hsl(var(--muted) / 0.5) 50%, hsl(var(--muted)) 100%); background-size: 200% 100%; animation: shimmer 1.5s infinite; }
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* Highlight.js */
+.hljs { display: block; overflow-x: auto; padding: 1rem; font-size: 0.8125rem; line-height: 1.6; border-radius: 0.5rem; background: hsl(var(--muted)); color: hsl(var(--foreground)); }
+.dark .hljs { background: hsl(240 5% 13%); }
+.hljs-comment, .hljs-punctuation { color: hsl(var(--fina-text-tertiary)); }
+.hljs-keyword, .hljs-selector-tag { color: hsl(280 60% 55%); }
+.hljs-number, .hljs-string, .hljs-literal { color: hsl(150 60% 40%); }
+.hljs-title, .hljs-section, .hljs-name { color: hsl(30 80% 50%); }
+.hljs-attribute, .hljs-attr, .hljs-variable, .hljs-type { color: hsl(200 70% 50%); }
+
+/* WikiContent */
+.wiki-content { line-height: 1.8; font-size: 15px; }
+.wiki-content a[href^="wiki:"] { color: hsl(var(--primary)); font-weight: 500; text-decoration: none; background: hsl(var(--primary) / 0.08); padding: 1px 4px; border-radius: 3px; }
+.wiki-content a[href^="wiki:"]:hover { background: hsl(var(--primary) / 0.15); }
+.wiki-content blockquote { margin: 1rem 0; padding: 0.75rem 1rem; border-left: 3px solid hsl(var(--primary) / 0.4); background: hsl(var(--muted)); border-radius: 0 0.25rem 0.25rem 0; color: hsl(var(--muted-foreground)); }
+.wiki-content pre { margin: 1rem 0; border-radius: 0.5rem; overflow: hidden; border: 1px solid hsl(var(--border)); }
+.wiki-content :not(pre) > code { background: hsl(var(--muted)); padding: 0.15em 0.4em; border-radius: 0.25rem; color: hsl(var(--primary)); }
+.wiki-content table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+.wiki-content th, .wiki-content td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid hsl(var(--border)); font-size: 0.875rem; }
+.wiki-content th { background: hsl(var(--muted)); font-weight: 600; }
+.wiki-content hr { margin: 1.5rem 0; border: none; height: 1px; background: hsl(var(--border)); }

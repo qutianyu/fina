@@ -1,0 +1,9 @@
+Question: {question}
+
+Articles:
+{summariesList}
+
+Find the most relevant articles (max 5) for the question above. Return only the article IDs in this format:
+[ID1, ID2, ID3]
+
+If no relevant articles found, return empty array: []

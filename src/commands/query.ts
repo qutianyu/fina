@@ -1,10 +1,10 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import chalk from 'chalk';
+import picocolors from 'picocolors';
 import matter from 'gray-matter';
 import { LLMClient } from '../lib/llm';
 import { ConfigManager } from '../lib/config';
-import { IndexedSource, Concept } from '../types';
+import { IndexedSource, Concept, ChatMessage } from '../types';
 import { slugify } from '../lib/utils';
 
 interface ScoredSource {
@@ -19,43 +19,43 @@ export class QueryCommand {
     this.config = config;
   }
 
-  async execute(question: string): Promise<void> {
+  async execute(question: string, chatHistory?: ChatMessage[]): Promise<string | null> {
     if (!question) {
-      console.log(chalk.red('Please provide a question.'));
-      return;
+      console.log(picocolors.red('Please provide a question.'));
+      return null;
     }
 
     const wikiDir = this.config.getWikiDir();
     const sourcesIndexPath = path.join(wikiDir, 'sources-index.json');
 
-    console.log(chalk.cyan(`\n🤔 ${question}\n`));
+    console.log(picocolors.cyan(`\n🤔 ${question}\n`));
 
     if (!await this.config.ensureConfigured()) {
-      return;
+      return null;
     }
 
     // Validate read paths are within KB
     this.config.validateRead(sourcesIndexPath);
 
     if (!await fs.pathExists(sourcesIndexPath)) {
-      console.log(chalk.yellow('Wiki not yet compiled. Run /make first.'));
-      return;
+      console.log(picocolors.yellow('Wiki not yet compiled. Run /make first.'));
+      return null;
     }
 
     const sources = await fs.readJson(sourcesIndexPath) as IndexedSource[];
 
     if (sources.length === 0) {
-      console.log(chalk.yellow('Wiki is empty. Add some sources and run /make.'));
-      return;
+      console.log(picocolors.yellow('Wiki is empty. Add some sources and run /make.'));
+      return null;
     }
 
     // Find relevant sources
     const relevantSources = await this.findRelevantSources(sources, question);
-    console.log(chalk.gray(`Found ${relevantSources.length} relevant sources\n`));
+    console.log(picocolors.gray(`Found ${relevantSources.length} relevant sources\n`));
 
     if (relevantSources.length === 0) {
-      console.log(chalk.yellow('No relevant sources found. Try rephrasing your question.'));
-      return;
+      console.log(picocolors.yellow('No relevant sources found. Try rephrasing your question.'));
+      return null;
     }
 
     // Build context from relevant sources
@@ -67,11 +67,32 @@ export class QueryCommand {
     const isZh = lang === 'zh';
 
     const systemPrompt = isZh
-      ? '你是一个知识库助手，请根据提供的上下文信息，用中文回答用户的问题。如果不确定，请说明。'
-      : 'You are a knowledge base assistant. Answer the user question based on the provided context. If you are unsure, say so.';
+      ? `你是一个知识库助手。如果用户的问题：
+1. 包含不明确的指代词（如"它"、"这个"、"他"等）而上下文无法确定
+2. 缺少回答所需的关键信息
+3. 过于模糊无法给出准确答案
+
+请主动向用户提问澄清，而不是猜测答案。优先问一个最关键的问题。
+如果上下文足够回答，请给出准确答案并注明来源。`
+      : `You are a knowledge base assistant. If the user's question:
+1. Contains ambiguous references ("it", "this", etc.) that cannot be determined from context
+2. Lacks key information needed to answer
+3. Is too vague to provide an accurate answer
+
+Ask the user for clarification instead of guessing. Ask only the most critical clarifying question.
+If context is sufficient, provide an accurate answer and cite sources.`;
+
+    // Build chat history content if present
+    let historySection = '';
+    if (chatHistory && chatHistory.length > 0) {
+      const historyContent = chatHistory
+        .map(m => `<${m.role}>${m.content}</${m.role}>`)
+        .join('\n\n');
+      historySection = `\n\n## Conversation History\n${historyContent}\n\n## Current Question`;
+    }
 
     try {
-      console.log(chalk.gray('Thinking...\n'));
+      console.log(picocolors.gray('Thinking...\n'));
 
       let fullResponse = '';
       let currentLines = 0;
@@ -83,7 +104,7 @@ export class QueryCommand {
         max_tokens: 1500,
         messages: [{
           role: 'user',
-          content: `${systemPrompt}\n\nQuestion: ${question}\n\nContext:\n${context}\n\nAnswer the question based on the context above. At the end of your answer, cite the sources using their full file paths in this format:\n**来源**: [标题](绝对路径)\n\nIf you are unsure, say so.`
+          content: `${systemPrompt}${historySection}\n\nQuestion: ${question}\n\nContext:\n${context}\n\nAnswer the question based on the context above. At the end of your answer, cite the sources using their full file paths in this format:\n**来源**: 标题 (绝对路径)\n\nIf you are unsure, say so.`
         }],
         onChunk: (text) => {
           fullResponse += text;
@@ -100,58 +121,77 @@ export class QueryCommand {
           } else if (pendingThink.includes('<think>') && !pendingThink.includes('</think>')) {
             // We're inside a think block but it hasn't closed yet
             inThinkBlock = true;
-            return; // Don't display anything yet
+            return;
           }
 
-          // Remove any remaining think blocks and render markdown
-          let displayText = this.stripMarkdown(fullResponse);
-          const newLines = displayText.split('\n').length;
-
-          // Move cursor back to start position
-          if (currentLines > 0) {
-            process.stdout.write('\x1b[' + currentLines + 'A');
-          }
-          process.stdout.write('\r');
-
-          // Clear from current position to end of screen
-          process.stdout.write('\x1b[0J');
-
-          // Output all content
-          process.stdout.write(displayText);
-
-          currentLines = newLines;
+          // Remove think blocks and output
+          const displayText = this.stripMarkdown(fullResponse);
+          process.stdout.write(displayText.slice(process.stdout.columns || 80));
         }
       });
 
       console.log();
 
+      // Auto-evaluate and merge if valuable
+      await this.evaluateAndAutoMerge(question, fullResponse, relevantSources);
+
+      return fullResponse;
+
     } catch (err) {
-      console.log(chalk.red(`Query failed: ${(err as Error).message}`));
+      console.log(picocolors.red(`Query failed: ${(err as Error).message}`));
+      return null;
     }
   }
 
-  async executeDirect(question: string): Promise<void> {
+  async executeDirect(question: string, chatHistory?: ChatMessage[]): Promise<string | null> {
     if (!question) {
-      console.log(chalk.red('Please provide a question.'));
-      return;
+      console.log(picocolors.red('Please provide a question.'));
+      return null;
     }
 
     if (!await this.config.ensureConfigured()) {
-      return;
+      return null;
     }
 
-    console.log(chalk.cyan(`\n🤔 ${question}\n`));
+    console.log(picocolors.cyan(`\n🤔 ${question}\n`));
 
     const client = new LLMClient(this.config);
     const lang = this.config.getLanguage();
     const isZh = lang === 'zh';
 
     const systemPrompt = isZh
-      ? '你是一个有用的AI助手，请用中文回答用户的问题。'
-      : 'You are a helpful AI assistant. Answer the user question in a helpful way.';
+      ? `你是一个有用的AI助手。如果用户的问题：
+1. 包含不明确的指代词（如"它"、"这个"、"他"等）而上下文无法确定
+2. 缺少回答所需的关键信息
+3. 过于模糊无法给出准确答案
+
+请主动向用户提问澄清，而不是猜测答案。优先问一个最关键的问题。
+如果问题足够清晰，请给出有帮助的回答。`
+      : `You are a helpful AI assistant. If the user's question:
+1. Contains ambiguous references ("it", "this", etc.) that cannot be determined from context
+2. Lacks key information needed to answer
+3. Is too vague to provide an accurate answer
+
+Ask the user for clarification instead of guessing. Ask only the most critical clarifying question.
+If the question is clear, provide a helpful answer.`;
+
+    // Build messages including history
+    const messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [
+      { role: 'system', content: systemPrompt }
+    ];
+
+    // Add chat history
+    if (chatHistory && chatHistory.length > 0) {
+      for (const msg of chatHistory) {
+        messages.push({ role: msg.role, content: msg.content });
+      }
+    }
+
+    // Add current question
+    messages.push({ role: 'user', content: question });
 
     try {
-      console.log(chalk.gray('Thinking...\n'));
+      console.log(picocolors.gray('Thinking...\n'));
 
       let fullResponse = '';
       let currentLines = 0;
@@ -161,13 +201,7 @@ export class QueryCommand {
       await client.createMessageStream({
         model: this.config.getModel(),
         max_tokens: 1500,
-        messages: [{
-          role: 'system',
-          content: systemPrompt
-        }, {
-          role: 'user',
-          content: question
-        }],
+        messages,
         onChunk: (text) => {
           fullResponse += text;
           pendingThink += text;
@@ -204,9 +238,11 @@ export class QueryCommand {
       });
 
       console.log();
+      return fullResponse;
 
     } catch (err) {
-      console.log(chalk.red(`Query failed: ${(err as Error).message}`));
+      console.log(picocolors.red(`Query failed: ${(err as Error).message}`));
+      return null;
     }
   }
 
@@ -262,7 +298,7 @@ export class QueryCommand {
 
     // If no source has score >= 4, use LLM to find relevant sources
     if (maxScore < 4 && sources.length > 0) {
-      console.log(chalk.gray('No clear matches found, using AI to find relevant sources...\n'));
+      console.log(picocolors.gray('No clear matches found, using AI to find relevant sources...\n'));
       return await this.findRelevantSourcesWithLLM(sources, question);
     }
 
@@ -324,7 +360,7 @@ If no relevant articles found, return empty array: []`;
         return sources.filter((s: IndexedSource) => ids.includes(s.id));
       }
     } catch (err) {
-      console.log(chalk.yellow(`LLM source selection failed: ${(err as Error).message}`));
+      console.log(picocolors.yellow(`LLM source selection failed: ${(err as Error).message}`));
     }
 
     // Fallback: return top 3 by backlinks
@@ -335,8 +371,29 @@ If no relevant articles found, return empty array: []`;
 
   async buildContext(wikiDir: string, sources: IndexedSource[]): Promise<string> {
     const contexts: string[] = [];
+    const sourcesIndexPath = path.join(wikiDir, 'sources-index.json');
 
+    // Collect all source IDs to include (direct + backlinks expansion)
+    const sourceIdsToInclude = new Set<string>();
     for (const source of sources) {
+      sourceIdsToInclude.add(source.id);
+      // Add backlinks (source IDs that reference this source)
+      for (const backlink of source.backlinks || []) {
+        sourceIdsToInclude.add(backlink);
+      }
+    }
+
+    // Read all sources from index
+    let allSources: IndexedSource[] = [];
+    if (await fs.pathExists(sourcesIndexPath)) {
+      allSources = await fs.readJson(sourcesIndexPath) as IndexedSource[];
+    }
+
+    // Build context for included sources
+    for (const sourceId of sourceIdsToInclude) {
+      const source = allSources.find(s => s.id === sourceId);
+      if (!source) continue;
+
       const titleSlug = slugify(source.title);
       const summaryPath = path.join(wikiDir, 'summaries', source.type, `${titleSlug}.md`);
 
@@ -347,10 +404,11 @@ If no relevant articles found, return empty array: []`;
         const content = await fs.readFile(summaryPath, 'utf-8');
         const parsed = matter(content);
 
-        contexts.push(`## ${source.title} (${source.type})\nPath: ${summaryPath}\n\n${parsed.content}`);
+        const prefix = sourceIdsToInclude.has(source.id) ? '' : '[via backlink] ';
+        contexts.push(`${prefix}## ${source.title} (${source.type})\nPath: ${summaryPath}\n\n${parsed.content}`);
       } else {
-        // Fallback to what's in index
-        contexts.push(`## ${source.title}\n${source.summary || 'No content available'}`);
+        const prefix = sourceIdsToInclude.has(source.id) ? '' : '[via backlink] ';
+        contexts.push(`${prefix}## ${source.title}\n${source.summary || 'No content available'}`);
       }
     }
 
@@ -368,7 +426,8 @@ If no relevant articles found, return empty array: []`;
         this.config.validateRead(conceptsIndexPath);
 
         if (await fs.pathExists(conceptsIndexPath)) {
-          const concepts = await fs.readJson(conceptsIndexPath) as Concept[];
+          const conceptsIndex = await fs.readJson(conceptsIndexPath);
+          const concepts: Concept[] = conceptsIndex.concepts || [];
           contexts.push('\n## Relevant Concepts\n');
           for (const concept of concepts) {
             if (allConcepts.has(concept.term)) {
@@ -551,5 +610,147 @@ If no relevant articles found, return empty array: []`;
     const prefix = isHeader ? '│ ' : '│ ';
     const suffix = ' │';
     output.push(prefix + formatted.join(' │ ') + suffix);
+  }
+
+  /** Evaluate if answer is valuable enough to merge, and auto-merge if yes */
+  private async evaluateAndAutoMerge(question: string, answer: string, relevantSources: IndexedSource[]): Promise<void> {
+    try {
+      const evaluation = await this.evaluateMergeValue(question, answer, relevantSources);
+
+      if (evaluation.shouldMerge && evaluation.targetConcept) {
+        console.log(picocolors.gray(`  💾 Auto-merging to "${evaluation.targetConcept}"...`));
+        await this.autoMerge(question, answer, evaluation.targetConcept);
+        console.log(picocolors.green(`  ✓ Merged into "${evaluation.targetConcept}"`));
+      }
+    } catch (err) {
+      // Silently fail - auto-merge is best-effort
+      console.log(picocolors.gray(`  (skipping auto-merge: ${(err as Error).message})`));
+    }
+  }
+
+  /** Evaluate if the answer should be merged */
+  private async evaluateMergeValue(question: string, answer: string, relevantSources: IndexedSource[]): Promise<{
+    shouldMerge: boolean;
+    targetConcept: string | null;
+    reason: string;
+  }> {
+    const wikiDir = this.config.getWikiDir();
+    const conceptsIndexPath = path.join(wikiDir, 'concepts-index.json');
+
+    // Collect all available concepts
+    let allConcepts: string[] = [];
+    if (await fs.pathExists(conceptsIndexPath)) {
+      const conceptsIndex = await fs.readJson(conceptsIndexPath);
+      allConcepts = (conceptsIndex.concepts || []).map((c: Concept) => c.term);
+    }
+
+    // Collect concepts from relevant sources
+    const sourceConcepts = [...new Set(relevantSources.flatMap(s => s.concepts || []))];
+    const availableConcepts = [...new Set([...allConcepts, ...sourceConcepts])];
+
+    if (availableConcepts.length === 0) {
+      return { shouldMerge: false, targetConcept: null, reason: 'No concepts available' };
+    }
+
+    const lang = this.config.getLanguage();
+    const isZh = lang === 'zh';
+
+    const systemPrompt = isZh
+      ? await fs.readFile(path.join(process.cwd(), 'prompts', 'query', 'evaluate-merge-system-zh.txt'), 'utf-8')
+      : await fs.readFile(path.join(process.cwd(), 'prompts', 'query', 'evaluate-merge-system-en.txt'), 'utf-8');
+
+    const userPrompt = isZh
+      ? await fs.readFile(path.join(process.cwd(), 'prompts', 'query', 'evaluate-merge-user-zh.txt'), 'utf-8')
+      : await fs.readFile(path.join(process.cwd(), 'prompts', 'query', 'evaluate-merge-user-en.txt'), 'utf-8');
+
+    const formattedUserPrompt = userPrompt
+      .replace('{question}', question)
+      .replace('{answer}', answer)
+      .replace('{concepts}', availableConcepts.join(', '));
+
+    const client = new LLMClient(this.config);
+
+    const message = await client.createMessage({
+      model: this.config.getModel(),
+      max_tokens: 500,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: formattedUserPrompt }
+      ]
+    });
+
+    const response = message.content[0]?.text || '';
+
+    // Parse response
+    const mergeMatch = response.match(/MERGE:\s*(YES|NO)/i);
+    const targetMatch = response.match(/TARGET:\s*([^\s,]+)/i);
+    const reasonMatch = response.match(/REASON:\s*([^\n]+)/i);
+
+    const shouldMerge = mergeMatch?.[1]?.toUpperCase() === 'YES';
+    const targetConcept = targetMatch?.[1] || null;
+
+    return {
+      shouldMerge,
+      targetConcept,
+      reason: reasonMatch?.[1] || ''
+    };
+  }
+
+  /** Auto-merge answer into target concept */
+  private async autoMerge(question: string, answer: string, targetConcept: string): Promise<void> {
+    const wikiDir = this.config.getWikiDir();
+    const conceptDir = path.join(wikiDir, 'concepts');
+    const conceptsIndexPath = path.join(wikiDir, 'concepts-index.json');
+
+    // Find matching concept file
+    let conceptFiles = await fs.readdir(conceptDir);
+    let matchedFile = conceptFiles.find(f =>
+      f.replace('.md', '').toLowerCase() === slugify(targetConcept).toLowerCase()
+    );
+
+    if (!matchedFile) {
+      throw new Error(`Concept not found: ${targetConcept}`);
+    }
+
+    const conceptPath = path.join(conceptDir, matchedFile);
+    this.config.validateWrite(conceptPath);
+
+    // Read concept file
+    const conceptContent = await fs.readFile(conceptPath, 'utf-8');
+    const { data: conceptMeta, content: conceptBody } = matter(conceptContent);
+
+    // Merge content: append answer to concept
+    const mergedContent = matter.stringify(
+      `${conceptBody}\n\n---\n\n## From Query: ${question}\n\n${answer}`,
+      {
+        term: conceptMeta?.term || targetConcept,
+        sources: conceptMeta?.sources || [],
+        relatedConcepts: conceptMeta?.relatedConcepts || [],
+        backlinks: conceptMeta?.backlinks || [],
+        updated: new Date().toISOString(),
+        autoMerged: true
+      }
+    );
+
+    // Write merged concept
+    await fs.writeFile(conceptPath, mergedContent);
+
+    // Update backlinks in concepts-index.json
+    if (await fs.pathExists(conceptsIndexPath)) {
+      const conceptsIndex = await fs.readJson(conceptsIndexPath);
+      const concepts = conceptsIndex.concepts || [];
+
+      const targetSlug = slugify(targetConcept);
+      for (const concept of concepts) {
+        if (slugify(concept.term) === targetSlug) {
+          if (!concept.backlinks) {
+            concept.backlinks = [];
+          }
+          break;
+        }
+      }
+
+      await fs.writeJson(conceptsIndexPath, conceptsIndex, { spaces: 2 });
+    }
   }
 }

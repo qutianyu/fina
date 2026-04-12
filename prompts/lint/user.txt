@@ -1,0 +1,9 @@
+Analyze these concept definitions for contradictions or conflicting information:
+
+{conceptsText}
+
+Check if any concepts have conflicting definitions or mutually exclusive properties.
+Report any contradictions found in this format:
+CONTRADICTION: [Concept A] vs [Concept B] - [Brief explanation]
+
+If no contradictions found, respond with: NONE

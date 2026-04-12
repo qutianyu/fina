@@ -1,0 +1,4 @@
+Provide brief definitions (1 sentence each) for these concepts found in a knowledge base:
+
+Format:
+**Term**: definition

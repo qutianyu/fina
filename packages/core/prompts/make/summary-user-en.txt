@@ -1,0 +1,19 @@
+Process each of the following sources. For each one provide:
+1. A brief summary (2-3 sentences)
+2. 3-5 key concepts/tags
+3. Moderately compressed content (preserve meaning, remove redundancy, keep core info)
+
+Format for EACH source (strictly follow this format):
+## [Title1]
+**Summary:** Brief summary here
+**Concepts:** concept1, concept2, concept3
+---
+Compressed content here
+
+## [Title2]
+**Summary:** ...
+**Concepts:** ...
+---
+Compressed content...
+
+(Repeat for every source, include ALL sources)

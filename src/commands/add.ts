@@ -1,7 +1,7 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import axios from 'axios';
-import chalk from 'chalk';
+import picocolors from 'picocolors';
 import { SkillManager } from '../lib/skills';
 import { Extractor } from '../lib/extractor';
 import { LLMClient } from '../lib/llm';
@@ -19,7 +19,7 @@ export class AddCommand {
   }
 
   async execute(source: string, isDirectory: boolean = false): Promise<void> {
-    console.log(chalk.cyan(`Adding: ${source}`));
+    console.log(picocolors.cyan(`Adding: ${source}`));
 
     if (source.startsWith('http://') || source.startsWith('https://')) {
       await this.addFromUrl(source);
@@ -32,7 +32,7 @@ export class AddCommand {
 
   async addFromUrl(url: string): Promise<void> {
     try {
-      console.log(chalk.gray('Fetching webpage...'));
+      console.log(picocolors.gray('Fetching webpage...'));
       const response = await axios.get(url, {
         timeout: 15000,
         headers: {
@@ -43,18 +43,18 @@ export class AddCommand {
       // Check for matching skill
       const skill = this.skillManager ? this.skillManager.matchSkill(url) : null;
       if (skill) {
-        console.log(chalk.gray(`  Using skill: ${skill.name}`));
+        console.log(picocolors.gray(`  Using skill: ${skill.name}`));
       }
 
       const { title, content, author } = Extractor.extract(response.data, skill ?? undefined);
 
       if (!content) {
-        console.log(chalk.red('Failed to extract content from page'));
+        console.log(picocolors.red('Failed to extract content from page'));
         return;
       }
 
       // Clean content using LLM
-      console.log(chalk.gray('Cleaning content with AI...'));
+      console.log(picocolors.gray('Cleaning content with AI...'));
       const cleanedContent = await this.cleanContent(content, skill);
 
       // Generate filename
@@ -80,11 +80,11 @@ type: article
 `;
       await fs.writeFile(filePath, frontmatter + cleanedContent);
 
-      console.log(chalk.green(`✓ Saved to: ${path.relative(process.cwd(), filePath)}`));
-      console.log(chalk.gray(`  Title: ${title}`));
+      console.log(picocolors.green(`✓ Saved to: ${path.relative(process.cwd(), filePath)}`));
+      console.log(picocolors.gray(`  Title: ${title}`));
 
     } catch (err) {
-      console.log(chalk.red(`Failed to fetch URL: ${(err as Error).message}`));
+      console.log(picocolors.red(`Failed to fetch URL: ${(err as Error).message}`));
     }
   }
 
@@ -139,13 +139,13 @@ Output ONLY the cleaned content, nothing else. Do not add explanations or notes.
       const resolvedPath = path.resolve(filePath);
 
       if (!await fs.pathExists(resolvedPath)) {
-        console.log(chalk.red(`File not found: ${filePath}`));
+        console.log(picocolors.red(`File not found: ${filePath}`));
         return;
       }
 
       const stats = await fs.stat(resolvedPath);
       if (!stats.isFile()) {
-        console.log(chalk.red(`Not a file: ${filePath}`));
+        console.log(picocolors.red(`Not a file: ${filePath}`));
         return;
       }
 
@@ -186,12 +186,12 @@ Output ONLY the cleaned content, nothing else. Do not add explanations or notes.
       }
       await fs.copy(resolvedPath, destPath);
 
-      console.log(chalk.green(`✓ Copied to: ${path.relative(process.cwd(), destPath)}`));
-      console.log(chalk.gray(`  Size: ${(stats.size / 1024).toFixed(1)} KB`));
-      console.log(chalk.gray(`  Type: ${ext || 'unknown'}`));
+      console.log(picocolors.green(`✓ Copied to: ${path.relative(process.cwd(), destPath)}`));
+      console.log(picocolors.gray(`  Size: ${(stats.size / 1024).toFixed(1)} KB`));
+      console.log(picocolors.gray(`  Type: ${ext || 'unknown'}`));
 
     } catch (err) {
-      console.log(chalk.red(`Failed to copy file: ${(err as Error).message}`));
+      console.log(picocolors.red(`Failed to copy file: ${(err as Error).message}`));
     }
   }
 
@@ -203,13 +203,13 @@ Output ONLY the cleaned content, nothing else. Do not add explanations or notes.
       const resolvedPath = path.resolve(dirPath);
 
       if (!await fs.pathExists(resolvedPath)) {
-        console.log(chalk.red(`Directory not found: ${dirPath}`));
+        console.log(picocolors.red(`Directory not found: ${dirPath}`));
         return;
       }
 
       const stats = await fs.stat(resolvedPath);
       if (!stats.isDirectory()) {
-        console.log(chalk.red(`Not a directory: ${dirPath}`));
+        console.log(picocolors.red(`Not a directory: ${dirPath}`));
         return;
       }
 
@@ -217,11 +217,11 @@ Output ONLY the cleaned content, nothing else. Do not add explanations or notes.
       const files = await this.collectFiles(resolvedPath);
 
       if (files.length === 0) {
-        console.log(chalk.yellow(`No supported files found in: ${dirPath}`));
+        console.log(picocolors.yellow(`No supported files found in: ${dirPath}`));
         return;
       }
 
-      console.log(chalk.cyan(`Adding ${files.length} files from: ${dirPath}\n`));
+      console.log(picocolors.cyan(`Adding ${files.length} files from: ${dirPath}\n`));
 
       // Use single timestamp for all files in batch
       const timestamp = Date.now();
@@ -259,12 +259,12 @@ Output ONLY the cleaned content, nothing else. Do not add explanations or notes.
         await this.copyFileInBatch(file, timestamp, imageMap);
       }
 
-      console.log(chalk.green(`\n✓ Added ${files.length} files`));
+      console.log(picocolors.green(`\n✓ Added ${files.length} files`));
       if (imageMap.size > 0) {
-        console.log(chalk.gray(`  + ${imageMap.size} images referenced in markdown`));
+        console.log(picocolors.gray(`  + ${imageMap.size} images referenced in markdown`));
       }
     } catch (err) {
-      console.log(chalk.red(`Failed to add directory: ${(err as Error).message}`));
+      console.log(picocolors.red(`Failed to add directory: ${(err as Error).message}`));
     }
   }
 
@@ -306,9 +306,9 @@ Output ONLY the cleaned content, nothing else. Do not add explanations or notes.
         await fs.copy(resolvedPath, destPath);
       }
 
-      console.log(chalk.gray(`  + ${path.basename(resolvedPath)}`));
+      console.log(picocolors.gray(`  + ${path.basename(resolvedPath)}`));
     } catch (err) {
-      console.log(chalk.red(`Failed to copy ${filePath}: ${(err as Error).message}`));
+      console.log(picocolors.red(`Failed to copy ${filePath}: ${(err as Error).message}`));
     }
   }
 

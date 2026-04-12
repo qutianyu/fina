@@ -1,0 +1,19 @@
+Please analyze all articles below and categorize/merge them.
+
+Format requirements (strictly follow):
+
+## Group 1: [Group Topic Name]
+**Included Articles**: [Article 1 Title], [Article 2 Title], ...
+**Deep Summary**: [2-3 paragraphs of in-depth analysis, integrating key information and common points from all articles]
+**Key Concepts**: concept1, concept2, concept3
+**Source Article Count**: N
+
+## Group 2: [Group Topic Name]
+...
+
+(Repeat for each group, include all four parts above)
+
+---
+## Cross-References
+[Group 1] <--> [Group 2]: [Brief description of the relationship between these two groups]
+[Group 1] <--> [Group 3]: [Brief description of the relationship]

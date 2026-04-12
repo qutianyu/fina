@@ -1,26 +1,60 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import chalk from 'chalk';
+import * as crypto from 'crypto';
+import picocolors from 'picocolors';
 import matter from 'gray-matter';
 import { LLMClient } from '../lib/llm';
 import { ConfigManager } from '../lib/config';
-import { Source, Concept, IndexedSource } from '../types';
+import { Source, Concept, IndexedSource, ChangeLog } from '../types';
 import { generateId, slugify } from '../lib/utils';
 
 const MAX_CONCEPT_DEFINITIONS = 20;
+
+interface MakeCacheEntry {
+  hash: string;
+  sourceId: string;
+  lastMade: string;
+}
+
+interface MakeCache {
+  version: string;
+  entries: Record<string, MakeCacheEntry>;
+}
+
+function computeHash(content: string): string {
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
 
 export class MakeCommand {
   private config: ConfigManager;
   private sources: Source[] = [];
   private concepts: Concept[] = [];
   private imageMap: Map<string, string> = new Map(); // filename -> relative path in wiki
+  private cache: MakeCache = { version: '1.0', entries: {} };
+  private skippedSources: Source[] = [];
+  private changeLog: ChangeLog = {
+    timestamp: new Date().toISOString(),
+    action: 'make',
+    files: { added: [], updated: [], deleted: [] },
+    relationships: [],
+    sourceFiles: []
+  };
 
   constructor(config: ConfigManager) {
     this.config = config;
   }
 
   async execute(): Promise<void> {
-    console.log(chalk.cyan('\n🔨 Compiling wiki...\n'));
+    console.log(picocolors.cyan('\n🔨 Compiling wiki...\n'));
+
+    // Reset change log for this run
+    this.changeLog = {
+      timestamp: new Date().toISOString(),
+      action: 'make',
+      files: { added: [], updated: [], deleted: [] },
+      relationships: [],
+      sourceFiles: []
+    };
 
     if (!await this.config.ensureConfigured()) {
       return;
@@ -37,49 +71,110 @@ export class MakeCommand {
     await fs.ensureDir(path.join(wikiDir, 'concepts'));
     await fs.ensureDir(path.join(wikiDir, 'summaries'));
     await fs.ensureDir(path.join(wikiDir, 'images'));
+    await fs.ensureDir(path.join(wikiDir, 'output'));
 
     // Step 0: Collect and copy images
-    console.log(chalk.gray('🖼️  Collecting images...'));
+    console.log(picocolors.gray('🖼️  Collecting images...'));
     await this.collectAndCopyImages(rawDir, wikiDir);
 
     // Step 1: Collect all raw files
-    console.log(chalk.gray('📁 Scanning raw materials...'));
+    console.log(picocolors.gray('📁 Scanning raw materials...'));
     await this.collectRawFiles(rawDir);
 
     // Fix image paths in source content
     this.fixImagePaths();
 
+    // Track source files processed
+    this.changeLog.sourceFiles = this.sources.map(s => s.path);
+
     const totalChars = this.sources.reduce((sum, s) => sum + (s.content?.length || 0), 0);
-    console.log(chalk.green(`  Found ${this.sources.length} sources (${totalChars} chars)`));
+    console.log(picocolors.green(`  Found ${this.sources.length} sources (${totalChars} chars)`));
 
     if (this.sources.length === 0) {
-      console.log(chalk.yellow('\n⚠ No raw materials found. Add some with /add first.'));
+      console.log(picocolors.yellow('\n⚠ No raw materials found. Add some with /add first.'));
       return;
     }
 
+    // Step 1.5: Incremental detection — skip unchanged sources
+    console.log(picocolors.gray('\n🔍 Checking for changes...'));
+    await this.loadCache();
+    const { changed, unchanged } = this.detectChanges();
+    this.skippedSources = unchanged;
+    console.log(picocolors.gray(`  ${changed.length} changed, ${unchanged.length} unchanged (skipped)`));
+
+    if (changed.length === 0 && unchanged.length > 0) {
+      console.log(picocolors.green('  All sources are up-to-date. Rebuilding relationships only...'));
+      // 即使没有变更，仍需重建概念和关系（因为概念索引可能需要更新）
+      this.sources = unchanged;
+      await this.restoreSkippedSummaries();
+      await this.extractConcepts();
+      await this.buildRelationships();
+      await this.writeWikiFiles(wikiDir);
+      await this.writeConceptsIndex(wikiDir);
+      await this.generateIndex(wikiDir);
+      await this.appendLog(wikiDir);
+      console.log(picocolors.green('\n✅ Wiki rebuilt (no LLM calls needed)!'));
+      console.log(picocolors.gray(`  Sources: ${this.sources.length}`));
+      console.log(picocolors.gray(`  Concepts: ${this.concepts.length}`));
+      return;
+    }
+
+    // 仅处理变更的源
+    this.sources = changed;
+
     // Step 2: Generate summaries using AI
-    console.log(chalk.gray('\n✍️  Generating summaries...'));
+    console.log(picocolors.gray('\n✍️  Generating summaries...'));
     await this.generateSummaries();
 
-    // Step 3: Extract and define concepts
-    console.log(chalk.gray('\n🧠 Extracting concepts...'));
+    // Step 3: Merge skipped sources for relationship building
+    if (this.skippedSources.length > 0) {
+      this.sources = [...this.sources, ...this.skippedSources];
+    }
+
+    // Step 4: Extract and define concepts
+    console.log(picocolors.gray('\n🧠 Extracting concepts...'));
     await this.extractConcepts();
 
     // Step 4: Build relationships and backlinks
-    console.log(chalk.gray('\n🔗 Building relationships...'));
+    console.log(picocolors.gray('\n🔗 Building relationships...'));
     await this.buildRelationships();
 
+    // Track added files and relationships
+    for (const source of this.sources) {
+      this.changeLog.files.added.push(`summaries/${source.type}/${slugify(source.title)}.md`);
+    }
+    for (const concept of this.concepts) {
+      this.changeLog.files.added.push(`concepts/${slugify(concept.term)}.md`);
+    }
+    for (const concept of this.concepts) {
+      for (const related of concept.relatedConcepts || []) {
+        this.changeLog.relationships.push([concept.term, related]);
+      }
+    }
+
     // Step 5: Update wiki files with backlinks (rewrite after relationships built)
-    console.log(chalk.gray('\n📝 Updating wiki files with relationships...'));
+    console.log(picocolors.gray('\n📝 Updating wiki files with relationships...'));
     await this.writeWikiFiles(wikiDir);
 
-    // Step 6: Write concepts to separate index file
-    const conceptsIndexPath = path.join(wikiDir, 'concepts-index.json');
-    await fs.writeJson(conceptsIndexPath, this.concepts, { spaces: 2 });
+    // Step 6: Write concepts to structured index file (M1.5)
+    console.log(picocolors.gray('\n📋 Writing concepts index...'));
+    await this.writeConceptsIndex(wikiDir);
 
-    console.log(chalk.green('\n✅ Wiki compiled successfully!'));
-    console.log(chalk.gray(`  Sources: ${this.sources.length}`));
-    console.log(chalk.gray(`  Concepts: ${this.concepts.length}`));
+    // Step 7: Generate knowledge base index (M1.3)
+    console.log(picocolors.gray('\n🗺️  Generating knowledge base index...'));
+    await this.generateIndex(wikiDir);
+
+    // Step 8: Append to operation log (M1.4)
+    console.log(picocolors.gray('\n📝 Recording to operation log...'));
+    await this.appendLog(wikiDir);
+
+    // Save incremental cache
+    await this.saveCache();
+
+    console.log(picocolors.green('\n✅ Wiki compiled successfully!'));
+    console.log(picocolors.gray(`  Sources: ${this.sources.length}`));
+    console.log(picocolors.gray(`  Concepts: ${this.concepts.length}`));
+    console.log(picocolors.gray(`  Relationships: ${this.changeLog.relationships.length}`));
   }
 
   async collectAndCopyImages(rawDir: string, wikiDir: string): Promise<void> {
@@ -120,7 +215,7 @@ export class MakeCommand {
     };
 
     await copyImageDir(imagesDir, wikiImagesDir);
-    console.log(chalk.gray(`  Copied ${this.imageMap.size} images to wiki`));
+    console.log(picocolors.gray(`  Copied ${this.imageMap.size} images to wiki`));
   }
 
   fixImagePaths(): void {
@@ -204,13 +299,13 @@ export class MakeCommand {
     // Decide: all at once vs batched
     const useAllAtOnce = maxContextTokens > 0 && estimatedTokens < maxContextTokens;
 
-    console.log(chalk.gray(`  maxContextTokens=${maxContextTokens}, estimatedTokens=${Math.round(estimatedTokens)}, useAllAtOnce=${useAllAtOnce}`));
+    console.log(picocolors.gray(`  maxContextTokens=${maxContextTokens}, estimatedTokens=${Math.round(estimatedTokens)}, useAllAtOnce=${useAllAtOnce}`));
 
     if (useAllAtOnce) {
-      console.log(chalk.gray(`  Processing all at once...`));
+      console.log(picocolors.gray(`  Processing all at once...`));
       await this.generateSummariesAllAtOnce(client, lang, isZh);
     } else {
-      console.log(chalk.gray(`  Using batched processing...`));
+      console.log(picocolors.gray(`  Using batched processing...`));
       await this.generateSummariesBatched(client, batchSize, lang, isZh);
     }
   }
@@ -310,10 +405,10 @@ Compressed content...
         await this.writeSourceFile(this.sources[j]);
       }
 
-      console.log(chalk.green(`  ✓ All ${this.sources.length} sources summarized and saved`));
+      console.log(picocolors.green(`  ✓ All ${this.sources.length} sources summarized and saved`));
     } catch (err) {
-      console.log(chalk.yellow(`  ⚠ Failed to process all at once: ${(err as Error).message}`));
-      console.log(chalk.gray('  Falling back to batched processing...'));
+      console.log(picocolors.yellow(`  ⚠ Failed to process all at once: ${(err as Error).message}`));
+      console.log(picocolors.gray('  Falling back to batched processing...'));
       await this.generateSummariesBatched(client, 3, lang, isZh);
     }
   }
@@ -400,9 +495,9 @@ Format for each:
           await this.writeSourceFile(batch[j]);
         }
 
-        console.log(chalk.green(`  ✓ ${progress} Summarized and saved batch`));
+        console.log(picocolors.green(`  ✓ ${progress} Summarized and saved batch`));
       } catch (err) {
-        console.log(chalk.yellow(`  ⚠ ${progress} Failed to summarize batch: ${(err as Error).message}`));
+        console.log(picocolors.yellow(`  ⚠ ${progress} Failed to summarize batch: ${(err as Error).message}`));
       }
     }
   }
@@ -495,7 +590,7 @@ Format:
 
     if (allConcepts.size === 0) {
       // Auto-generate concepts from common terms
-      console.log(chalk.gray('  No explicit concepts found, auto-extracting...'));
+      console.log(picocolors.gray('  No explicit concepts found, auto-extracting...'));
       return;
     }
 
@@ -529,7 +624,7 @@ Format:
         }
       }
     } catch (err) {
-      console.log(chalk.yellow(`  ⚠ Failed to get concept definitions: ${(err as Error).message}`));
+      console.log(picocolors.yellow(`  ⚠ Failed to get concept definitions: ${(err as Error).message}`));
     }
 
     this.concepts = Array.from(allConcepts.values());
@@ -554,7 +649,7 @@ Format:
       source.backlinks = related.map(r => r.id);
     }
 
-    // Build concept relationships
+    // Build concept relationships and backlinks
     for (const concept of this.concepts) {
       const related = this.concepts
         .filter(c => c.term !== concept.term)
@@ -568,19 +663,31 @@ Format:
 
       concept.relatedConcepts = related.map(r => r.id);
     }
+
+    // Calculate backlinks for each concept
+    // If concept A's relatedConcepts includes B, then B gets A in its backlinks
+    for (const concept of this.concepts) {
+      concept.backlinks = [];
+    }
+    for (const concept of this.concepts) {
+      for (const relatedTerm of concept.relatedConcepts || []) {
+        const targetConcept = this.concepts.find(c => c.term === relatedTerm);
+        if (targetConcept && !targetConcept.backlinks!.includes(concept.term)) {
+          targetConcept.backlinks!.push(concept.term);
+        }
+      }
+    }
   }
 
   async writeWikiFiles(wikiDir: string): Promise<void> {
-    // Write summary files (flat structure by type, using ID)
+    // Update summary files with backlinks (they were written with empty backlinks during generateSummaries)
     for (const source of this.sources) {
       const type = source.type;
       const titleSlug = slugify(source.title);
       const summaryDir = path.join(wikiDir, 'summaries', type);
       const summaryPath = path.join(summaryDir, `${titleSlug}.md`);
 
-      // Validate paths
       this.config.validateWrite(summaryPath);
-
       await fs.ensureDir(summaryDir);
 
       const contentToStore = source.compressedContent || source.content || '';
@@ -595,17 +702,417 @@ Format:
       await fs.writeFile(summaryPath, content);
     }
 
+    // Update sources-index.json with all sources and their backlinks
+    const sourcesIndexPath = path.join(wikiDir, 'sources-index.json');
+    this.config.validateWrite(sourcesIndexPath);
+    const sourcesEntry: IndexedSource[] = this.sources.map(s => ({
+      id: s.id,
+      title: s.title,
+      type: s.type,
+      summary: s.summary || '',
+      concepts: s.concepts || [],
+      backlinks: s.backlinks || []
+    }));
+    await fs.writeJson(sourcesIndexPath, sourcesEntry, { spaces: 2 });
+
     // Write concept files
     for (const concept of this.concepts) {
       if (!concept.definition) continue;
       const slug = slugify(concept.term);
       const conceptPath = path.join(wikiDir, 'concepts', `${slug}.md`);
+      this.config.validateWrite(conceptPath);
+
       const content = matter.stringify(concept.definition, {
         term: concept.term,
         sources: concept.sources,
-        relatedConcepts: concept.relatedConcepts
+        relatedConcepts: concept.relatedConcepts || [],
+        backlinks: concept.backlinks || []
       });
       await fs.writeFile(conceptPath, content);
+    }
+  }
+
+  async writeConceptsIndex(wikiDir: string): Promise<void> {
+    // Write structured concepts-index.json (M1.5)
+    const conceptsIndexPath = path.join(wikiDir, 'concepts-index.json');
+
+    // Build relationships array from relatedConcepts
+    const relationships: Array<[string, string]> = [];
+    for (const concept of this.concepts) {
+      for (const related of concept.relatedConcepts || []) {
+        relationships.push([concept.term, related]);
+      }
+    }
+
+    const structuredIndex = {
+      version: '1.0',
+      lastUpdated: new Date().toISOString(),
+      concepts: this.concepts.map(c => ({
+        term: c.term,
+        definition: c.definition || '',
+        sources: c.sources,
+        relatedConcepts: c.relatedConcepts || [],
+        backlinks: c.backlinks || []
+      })),
+      relationships
+    };
+
+    await fs.writeJson(conceptsIndexPath, structuredIndex, { spaces: 2 });
+  }
+
+  async generateIndex(wikiDir: string): Promise<void> {
+    // Generate knowledge base index (M1.3)
+    const indexPath = path.join(wikiDir, 'index.md');
+    const summariesDir = path.join(wikiDir, 'summaries');
+
+    // Count articles
+    let totalArticles = 0;
+    if (await fs.pathExists(summariesDir)) {
+      const articleDir = path.join(summariesDir, 'article');
+      if (await fs.pathExists(articleDir)) {
+        totalArticles = (await fs.readdir(articleDir)).filter(f => f.endsWith('.md')).length;
+      }
+    }
+
+    // Build concept graph overview
+    const conceptGraphLines: string[] = [];
+    for (const concept of this.concepts.slice(0, 20)) {
+      const related = (concept.relatedConcepts || []).join(', ') || 'none';
+      const backlinks = (concept.backlinks || []).join(', ') || 'none';
+      conceptGraphLines.push(`- **${concept.term}** → relates: ${related}, backlinks: ${backlinks}`);
+    }
+
+    // List all articles
+    const articleLines: string[] = [];
+    if (await fs.pathExists(summariesDir)) {
+      const articleDir = path.join(summariesDir, 'article');
+      if (await fs.pathExists(articleDir)) {
+        for (const file of await fs.readdir(articleDir)) {
+          if (!file.endsWith('.md')) continue;
+          const content = await fs.readFile(path.join(articleDir, file), 'utf-8');
+          const { data } = matter(content);
+          const title = data?.title || file.replace('.md', '');
+          articleLines.push(`- [[summaries/article/${file.replace('.md', '')}|${title}]]`);
+        }
+      }
+    }
+
+    // List all concepts
+    const conceptLines: string[] = [];
+    for (const concept of this.concepts) {
+      conceptLines.push(`- [[concepts/${slugify(concept.term)}|${concept.term}]]`);
+    }
+
+    // Count relationships
+    let totalRelationships = 0;
+    for (const concept of this.concepts) {
+      totalRelationships += (concept.relatedConcepts || []).length;
+    }
+
+    const indexContent = `---
+version: "1.0"
+generated: ${new Date().toISOString()}
+---
+
+# Knowledge Base Index
+
+> Auto-generated by Fina LLM Wiki. Do not edit manually.
+
+## Statistics
+
+| Metric | Value |
+|--------|-------|
+| Total Articles | ${totalArticles} |
+| Total Concepts | ${this.concepts.length} |
+| Total Relationships | ${totalRelationships} |
+
+## Concept Graph
+
+${conceptGraphLines.length > 0 ? conceptGraphLines.join('\n') : '_No concepts yet_'}
+
+## All Articles
+
+${articleLines.length > 0 ? articleLines.join('\n') : '_No articles yet_'}
+
+## All Concepts
+
+${conceptLines.length > 0 ? conceptLines.join('\n') : '_No concepts yet_'}
+
+---
+
+_Last updated: ${new Date().toLocaleString()}_
+`;
+
+    await fs.writeFile(indexPath, indexContent);
+  }
+
+  async appendLog(wikiDir: string): Promise<void> {
+    // Append to operation log (M1.4)
+    const logPath = path.join(wikiDir, 'log.md');
+
+    const logEntry = `## ${this.changeLog.timestamp}
+
+### Changes
+${this.changeLog.files.added.length > 0 ? `- **Added**: ${this.changeLog.files.added.join(', ')}` : '- **Added**: (none)'}
+${this.changeLog.files.updated.length > 0 ? `- **Updated**: ${this.changeLog.files.updated.join(', ')}` : '- **Updated**: (none)'}
+${this.changeLog.files.deleted.length > 0 ? `- **Deleted**: ${this.changeLog.files.deleted.join(', ')}` : '- **Deleted**: (none)'}
+${this.changeLog.relationships.length > 0 ? `- **Relationships**: ${this.changeLog.relationships.map(([s, t]) => `${s} → ${t}`).join(', ')}` : ''}
+
+### Source Files Processed
+${this.changeLog.sourceFiles.map(f => `- ${f}`).join('\n')}
+
+---
+
+`;
+
+    // If log.md doesn't exist, create with header
+    if (!await fs.pathExists(logPath)) {
+      const header = `# Knowledge Base Log
+
+> Record of all changes to the knowledge base.
+
+---
+
+`;
+      await fs.writeFile(logPath, header + logEntry);
+    } else {
+      // Append to existing file
+      const existing = await fs.readFile(logPath, 'utf-8');
+      const marker = '\n\n---\n\n';
+      const parts = existing.split(marker);
+      const newContent = parts[0] + marker + logEntry + marker + parts.slice(1).join(marker);
+      await fs.writeFile(logPath, newContent);
+    }
+  }
+
+  // --- Incremental compilation: cache management ---
+
+  private getCachePath(wikiDir: string): string {
+    return path.join(wikiDir, '.make-cache.json');
+  }
+
+  private async loadCache(): Promise<void> {
+    const wikiDir = this.config.getWikiDir();
+    const cachePath = this.getCachePath(wikiDir);
+    if (await fs.pathExists(cachePath)) {
+      try {
+        this.cache = await fs.readJson(cachePath);
+      } catch {
+        this.cache = { version: '1.0', entries: {} };
+      }
+    }
+  }
+
+  private async saveCache(): Promise<void> {
+    const wikiDir = this.config.getWikiDir();
+    const cachePath = this.getCachePath(wikiDir);
+    await fs.writeJson(cachePath, this.cache, { spaces: 2 });
+  }
+
+  private detectChanges(): { changed: Source[]; unchanged: Source[] } {
+    const changed: Source[] = [];
+    const unchanged: Source[] = [];
+
+    for (const source of this.sources) {
+      const currentHash = computeHash(source.content || '');
+      const cached = this.cache.entries[source.path];
+
+      if (cached && cached.hash === currentHash) {
+        // 保持 source.id 与 cache 一致，避免重新生成
+        source.id = cached.sourceId;
+        unchanged.push(source);
+      } else {
+        changed.push(source);
+        // 更新 cache
+        this.cache.entries[source.path] = {
+          hash: currentHash,
+          sourceId: source.id,
+          lastMade: new Date().toISOString()
+        };
+      }
+    }
+
+    return { changed, unchanged };
+  }
+
+  /** 从已有 wiki 文件中恢复 skipped sources 的摘要和概念信息 */
+  private async restoreSkippedSummaries(): Promise<void> {
+    const wikiDir = this.config.getWikiDir();
+
+    for (const source of this.skippedSources) {
+      const titleSlug = slugify(source.title);
+      const summaryPath = path.join(wikiDir, 'summaries', source.type, `${titleSlug}.md`);
+
+      if (await fs.pathExists(summaryPath)) {
+        const content = await fs.readFile(summaryPath, 'utf-8');
+        const parsed = matter(content);
+        source.summary = parsed.data.summary || '';
+        source.concepts = parsed.data.concepts || [];
+        source.backlinks = parsed.data.backlinks || [];
+      }
+    }
+  }
+
+  /** Deep merge mode: analyze all sources and merge similar articles */
+  async executeDeep(): Promise<void> {
+    console.log(picocolors.cyan('\n🧠 Deep analyzing and merging wiki...\n'));
+
+    const rawDir = this.config.getRawDir();
+    const wikiDir = this.config.getWikiDir();
+    const deepDir = path.join(wikiDir, 'deep');
+
+    // Load all sources
+    this.sources = [];
+    await this.collectRawFiles(rawDir);
+
+    if (this.sources.length === 0) {
+      console.log(picocolors.yellow('No sources found in raw/. Add some sources first.'));
+      return;
+    }
+
+    console.log(picocolors.gray(`  Found ${this.sources.length} sources\n`));
+
+    const client = new LLMClient(this.config);
+    const lang = this.config.getLanguage();
+    const isZh = lang === 'zh';
+
+    const systemPrompt = isZh
+      ? await fs.readFile(path.join(process.cwd(), 'prompts', 'make', 'deep-system-zh.txt'), 'utf-8')
+      : await fs.readFile(path.join(process.cwd(), 'prompts', 'make', 'deep-system-en.txt'), 'utf-8');
+
+    const userPrompt = isZh
+      ? await fs.readFile(path.join(process.cwd(), 'prompts', 'make', 'deep-user-zh.txt'), 'utf-8')
+      : await fs.readFile(path.join(process.cwd(), 'prompts', 'make', 'deep-user-en.txt'), 'utf-8');
+
+    // Build source contents
+    const contents = this.sources.map((s, idx) =>
+      `=== ${idx + 1}. ${s.title} (${s.type}) ===\n${s.content.substring(0, 4000)}`
+    ).join('\n\n==========\n\n');
+
+    try {
+      console.log(picocolors.gray('  Analyzing and merging...\n'));
+
+      const message = await client.createMessage({
+        model: this.config.getModel(),
+        max_tokens: 12000,
+        messages: [{
+          role: 'user',
+          content: `${systemPrompt}\n\n${userPrompt}\n\n=== Articles to Analyze ===\n${contents}`
+        }]
+      });
+
+      let response = message.content[0]?.text || '';
+      // Strip think tags
+      const thinkIdx = response.lastIndexOf('</think>');
+      response = thinkIdx >= 0 ? response.substring(thinkIdx + 9).trim() : response;
+
+      // Ensure deep directory exists
+      await fs.ensureDir(deepDir);
+
+      // Parse groups from response
+      const groupBlocks = response.split(/##\s+分组\s*\d*\s*:/i).filter(Boolean);
+
+      const groups: Array<{
+        title: string;
+        articles: string[];
+        summary: string;
+        concepts: string[];
+        count: number;
+      }> = [];
+
+      for (const block of groupBlocks) {
+        const lines = block.trim().split('\n');
+        if (lines.length < 2) continue;
+
+        const title = lines[0].trim();
+
+        const articlesMatch = block.match(/\*\*包含文章\*\*:\s*(.+?)(?=\*\*|$)/i);
+        const summaryMatch = block.match(/\*\*深度摘要\*\*:\s*([\s\S]+?)(?=\*\*来源|\*\*关键|\*\*$)/i);
+        const conceptsMatch = block.match(/\*\*关键概念\*\*:\s*(.+?)(?=\*\*|$)/i);
+        const countMatch = block.match(/\*\*来源文章数\*\*:\s*(\d+)/i);
+
+        groups.push({
+          title,
+          articles: articlesMatch ? articlesMatch[1].split(/[,，]/).map(a => a.trim()).filter(Boolean) : [],
+          summary: summaryMatch ? summaryMatch[1].trim() : '',
+          concepts: conceptsMatch ? conceptsMatch[1].split(/[,，]/).map(c => c.trim()).filter(Boolean) : [],
+          count: countMatch ? parseInt(countMatch[1]) : 0
+        });
+      }
+
+      // Write group files
+      for (let i = 0; i < groups.length; i++) {
+        const group = groups[i];
+        const slug = slugify(group.title);
+        const groupPath = path.join(deepDir, `group_${i + 1}_${slug}.md`);
+
+        const content = `---
+type: deep-merge
+group: ${i + 1}
+title: "${group.title}"
+sourceCount: ${group.count}
+concepts: [${group.concepts.join(', ')}]
+---
+
+# ${group.title}
+
+**包含文章**: ${group.articles.join(', ')}
+
+## 深度摘要
+
+${group.summary}
+
+## 关键概念
+
+${group.concepts.map(c => `- ${c}`).join('\n')}
+
+## 来源
+
+${group.articles.map(a => `- ${a}`).join('\n')}
+`;
+
+        await fs.writeFile(groupPath, content, 'utf-8');
+      }
+
+      // Parse cross-references
+      const crossRefMatch = response.match(/---\s*##\s*交叉引用\s*([\s\S]+)$/i);
+      let crossRefContent = '';
+      if (crossRefMatch) {
+        crossRefContent = `# 交叉引用\n\n${crossRefMatch[1].trim()}`;
+        await fs.writeFile(path.join(deepDir, 'cross-refs.md'), crossRefContent, 'utf-8');
+      }
+
+      // Write index
+      const indexContent = `---
+version: "1.0"
+type: deep-merge
+generated: ${new Date().toISOString()}
+sourceCount: ${this.sources.length}
+groupCount: ${groups.length}
+---
+
+# Deep Merge Result
+
+## Groups
+
+${groups.map((g, i) => `${i + 1}. [[group_${i + 1}_${slugify(g.title)}.md|${g.title}]] (${g.count} articles)`).join('\n')}
+
+## Statistics
+
+- Total sources: ${this.sources.length}
+- Total groups: ${groups.length}
+- Generated: ${new Date().toLocaleString()}
+`;
+
+      await fs.writeFile(path.join(deepDir, 'index.md'), indexContent, 'utf-8');
+
+      console.log(picocolors.green(`  ✓ Deep merge complete!`));
+      console.log(picocolors.gray(`  Created ${groups.length} groups from ${this.sources.length} sources`));
+      console.log(picocolors.gray(`  Output: ${deepDir}/\n`));
+
+    } catch (err) {
+      console.log(picocolors.red(`  Deep merge failed: ${(err as Error).message}`));
+      throw err;
     }
   }
 }

@@ -75,9 +75,24 @@ fina run {path}/my-wiki
 | `fina add <source>` | Add URL or local file to raw materials |
 | `fina batch-add <dir>` | Recursively add all files from directory |
 | `fina make [path]` | Compile/refresh Wiki (summaries, concepts, relationships) |
-| `fina search <query>` | LLM-powered knowledge base search |
+| `fina search <query> [path]` | LLM-powered knowledge base search |
+| `fina lint [path]` | Run health check (orphans, dangling refs, contradictions) |
 | `fina status [path]` | Show knowledge base statistics |
 | `fina run [path]` | Start interactive Shell (multi-turn capable) |
+
+### Interactive Mode Commands
+
+When running `fina run`, additional commands are available:
+
+| Command | Description |
+|---------|-------------|
+| `/add <source>` | Add URL or file |
+| `/make` | Compile wiki |
+| `/status` | Show stats |
+| `/search <query>` | Search wiki |
+| `/save` | Save last query result to output/ |
+| `/merge <file>` | Merge output file into concept |
+| `/exit` | Exit interactive mode |
 
 ## Configuration
 
@@ -109,18 +124,24 @@ Edit `.fina/config.json` in your knowledge base directory:
 
 ```
 knowledge-base/
-├── .fina/           # Configuration
-│   ├── config.json  # Config file
-│   └── skills/      # Custom URL extraction rules
-├── raw/             # Raw materials (organized by timestamp)
-│   ├── articles/    # Articles (Markdown/text)
-│   ├── documents/   # Other documents
-│   ├── code/        # Source code
-│   └── images/      # Images
-└── wiki/            # Compiled output
-    ├── summaries/   # Article summaries (mirrors raw structure)
-    ├── concepts/    # Concept definitions
-    └── index.json   # Index metadata
+├── .fina/              # Configuration
+│   ├── config.json     # Config file
+│   └── skills/         # Custom URL extraction rules
+├── raw/                # Raw materials (immutable source)
+│   ├── articles/       # Articles (Markdown/text)
+│   ├── documents/      # Other documents
+│   ├── code/           # Source code
+│   └── images/         # Images
+└── wiki/               # LLM-compiled output
+    ├── index.md        # Knowledge map (auto-generated)
+    ├── log.md          # Change log
+    ├── sources-index.json  # All sources with metadata
+    ├── concepts-index.json # All concepts with relationships
+    ├── summaries/      # Article summaries (by type)
+    │   └── article/*.md
+    ├── concepts/       # Concept pages with backlinks
+    │   └── *.md
+    └── output/        # Query results (for /merge)
 ```
 
 ## Workflow

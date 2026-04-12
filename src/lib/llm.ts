@@ -1,5 +1,6 @@
 import { Anthropic } from '@anthropic-ai/sdk';
 import { OpenAI } from 'openai';
+import picocolors from 'picocolors';
 import { ConfigManager } from './config';
 
 export interface LLMMessage {
@@ -35,6 +36,28 @@ export class LLMClient {
     return new Anthropic({ apiKey, baseURL: baseUrl });
   }
 
+  private isRetryable(err: unknown): boolean {
+    const status = (err as any)?.status;
+    const code = (err as any)?.code;
+    if (code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'ENOTFOUND') return true;
+    if (!status) return true; // 网络错误等无 status 的异常视为可重试
+    return status >= 500 || status === 429;
+  }
+
+  private async withRetry<T>(fn: () => Promise<T>, maxRetries = 3, baseDelay = 1000): Promise<T> {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        if (attempt === maxRetries || !this.isRetryable(err)) throw err;
+        const delay = baseDelay * Math.pow(2, attempt);
+        console.log(picocolors.yellow(`  ⚠ LLM API error, retrying ${attempt + 1}/${maxRetries} after ${delay}ms...`));
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+    throw new Error('Unreachable');
+  }
+
   async createMessage({ model, max_tokens, messages }: {
     model?: string;
     max_tokens?: number;
@@ -51,13 +74,15 @@ export class LLMClient {
 
     if (this.type === 'openai') {
       const openAIClient = this.client as OpenAI;
-      const response = await openAIClient.chat.completions.create({
-        model: model || this.config.getModel(),
-        messages: messages.map(m => ({
-          role: m.role as 'user' | 'assistant' | 'system',
-          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
-        }))
-      });
+      const response = await this.withRetry(() =>
+        openAIClient.chat.completions.create({
+          model: model || this.config.getModel(),
+          messages: messages.map(m => ({
+            role: m.role as 'user' | 'assistant' | 'system',
+            content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+          }))
+        })
+      );
       let content = response.choices[0].message.content;
       if (Array.isArray(content)) {
         const textBlock = content.find((b: any) => b.type === 'text');
@@ -80,15 +105,17 @@ export class LLMClient {
       typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
     ).join('\n');
 
-    const result = await anthropicClient.messages.create({
-      model: model || this.config.getModel(),
-      max_tokens: max_tokens || 4096,
-      system: systemContent || undefined,
-      messages: otherMessages.map(m => ({
-        role: m.role as 'user' | 'assistant',
-        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
-      }))
-    });
+    const result = await this.withRetry(() =>
+      anthropicClient.messages.create({
+        model: model || this.config.getModel(),
+        max_tokens: max_tokens || 4096,
+        system: systemContent || undefined,
+        messages: otherMessages.map(m => ({
+          role: m.role as 'user' | 'assistant',
+          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+        }))
+      })
+    );
 
     if (this.config.debug) {
       console.log('\n========== LLM OUTPUT ==========');
@@ -118,15 +145,17 @@ export class LLMClient {
 
     if (this.type === 'openai') {
       const openAIClient = this.client as OpenAI;
-      const stream = await openAIClient.chat.completions.create({
-        model: model || this.config.getModel(),
-        max_tokens: max_tokens || 1500,
-        stream: true,
-        messages: messages.map(m => ({
-          role: m.role as 'user' | 'assistant' | 'system',
-          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
-        }))
-      });
+      const stream = await this.withRetry(() =>
+        openAIClient.chat.completions.create({
+          model: model || this.config.getModel(),
+          max_tokens: max_tokens || 1500,
+          stream: true,
+          messages: messages.map(m => ({
+            role: m.role as 'user' | 'assistant' | 'system',
+            content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+          }))
+        })
+      );
 
       for await (const chunk of stream) {
         const content = chunk.choices[0]?.delta?.content;
@@ -146,7 +175,8 @@ export class LLMClient {
       typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
     ).join('\n');
 
-    const stream = await anthropicClient.messages.stream({
+    // Anthropic stream() returns a sync iterable, not a Promise — no withRetry wrapper
+    const stream = anthropicClient.messages.stream({
       model: model || this.config.getModel(),
       max_tokens: max_tokens || 1500,
       system: systemContent || undefined,

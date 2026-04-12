@@ -1,0 +1,18 @@
+Please evaluate whether the following query answer is valuable enough to merge into the knowledge base:
+
+Question: {question}
+
+Answer:
+{answer}
+
+Related Concepts:
+{concepts}
+
+Please evaluate and return:
+1. **MERGE: YES/NO** - Whether it's worth merging
+2. **TARGET: [concept name]** - If yes, which existing concept should it merge into (only one most relevant)
+3. **REASON: [reason]** - Brief explanation
+
+Format:
+- If not worth merging: MERGE: NO, REASON: [reason]
+- If worth merging: MERGE: YES, TARGET: [concept name], REASON: [reason]

@@ -1,6 +1,6 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import chalk from 'chalk';
+import picocolors from 'picocolors';
 import matter from 'gray-matter';
 import { Skill } from '../types';
 
@@ -48,7 +48,7 @@ export class SkillManager {
       });
     } catch (err) {
       // Skip invalid skill files
-      console.log(chalk.yellow(`  Skipping invalid skill file: ${filePath}`));
+      console.log(picocolors.yellow(`  Skipping invalid skill file: ${filePath}`));
     }
   }
 

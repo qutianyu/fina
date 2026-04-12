@@ -2,11 +2,6 @@
 node_modules/
 package-lock.json
 
-# Logs
-logs/
-*.log
-npm-debug.log*
-
 # OS files
 .DS_Store
 Thumbs.db
@@ -14,15 +9,20 @@ Thumbs.db
 # IDE
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
 
 # Build output
+logs/
+*.log
+npm-debug.log*
 dist/
 build/
-
-# Test
-coverage/
+target/
+bin/
+test/
+docs/
 
 # Environment
 .env
@@ -35,13 +35,12 @@ coverage/
 
 # AI
 .claude/
+.opencode/
+.codex/
 *.claude
 claude-desktop.json
-CLAUDE.md
+CODEX.md
+AGENTS.md
 OPENCODE.md
-.opencode
-
-# fina
-bin/
-test/
+CLAUDE.md
 

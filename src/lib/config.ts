@@ -1,6 +1,6 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import chalk from 'chalk';
+import picocolors from 'picocolors';
 import { Config } from '../types';
 
 export class ConfigManager {
@@ -136,9 +136,9 @@ export class ConfigManager {
   validatePath(filePath: string): void {
     if (!this.isPathWithinKnowledgeBase(filePath)) {
       const kbDir = this.getKnowledgeBaseDir();
-      console.log(chalk.red(`\n⛔ Access denied: Path '${filePath}' is outside the knowledge base directory.`));
-      console.log(chalk.red(`   Knowledge base: ${kbDir}`));
-      console.log(chalk.red(`   Only files within the knowledge base directory can be accessed.`));
+      console.log(picocolors.red(`\n⛔ Access denied: Path '${filePath}' is outside the knowledge base directory.`));
+      console.log(picocolors.red(`   Knowledge base: ${kbDir}`));
+      console.log(picocolors.red(`   Only files within the knowledge base directory can be accessed.`));
       throw new Error(`Access denied: Path '${filePath}' is outside knowledge base '${kbDir}'`);
     }
   }

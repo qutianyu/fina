@@ -1,6 +1,6 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import chalk from 'chalk';
+import picocolors from 'picocolors';
 import { ConfigManager } from '../lib/config';
 
 export class StatusCommand {
@@ -18,14 +18,14 @@ export class StatusCommand {
     this.config.validateRead(rawDir);
     this.config.validateRead(wikiDir);
 
-    console.log(chalk.cyan('\n📊 Fina Status\n'));
-    console.log(chalk.gray('Raw Materials:'));
+    console.log(picocolors.cyan('\n📊 Fina Status\n'));
+    console.log(picocolors.gray('Raw Materials:'));
     await this.countDirectory(rawDir);
 
-    console.log(chalk.gray('\nWiki:'));
+    console.log(picocolors.gray('\nWiki:'));
     const wikiEmpty = await this.countWikiDirectory(wikiDir);
     if (wikiEmpty) {
-      console.log(chalk.gray('  (empty)'));
+      console.log(picocolors.gray('  (empty)'));
     }
 
     const sourcesIndexPath = path.join(wikiDir, 'sources-index.json');
@@ -36,11 +36,11 @@ export class StatusCommand {
       const concepts = await fs.pathExists(conceptsIndexPath)
         ? await fs.readJson(conceptsIndexPath) as any[]
         : [];
-      console.log(chalk.gray('\nKnowledge Base:'));
-      console.log(chalk.green(`  Sources indexed: ${sources.length}`));
-      console.log(chalk.green(`  Concepts defined: ${concepts.length}`));
+      console.log(picocolors.gray('\nKnowledge Base:'));
+      console.log(picocolors.green(`  Sources indexed: ${sources.length}`));
+      console.log(picocolors.green(`  Concepts defined: ${concepts.length}`));
     } else {
-      console.log(chalk.yellow('\n⚠ Wiki not yet compiled. Run /make to build it.'));
+      console.log(picocolors.yellow('\n⚠ Wiki not yet compiled. Run /make to build it.'));
     }
 
     console.log();
@@ -48,7 +48,7 @@ export class StatusCommand {
 
   private async countDirectory(dir: string): Promise<void> {
     if (!await fs.pathExists(dir)) {
-      console.log(chalk.gray('  (empty)'));
+      console.log(picocolors.gray('  (empty)'));
       return;
     }
 
@@ -60,16 +60,16 @@ export class StatusCommand {
       if (await fs.pathExists(subdirPath)) {
         const count = await this.countFilesRecursive(subdirPath);
         if (count > 0) {
-          console.log(chalk.white(`  ${subdir}: ${count}`));
+          console.log(picocolors.white(`  ${subdir}: ${count}`));
           total += count;
         }
       }
     }
 
     if (total === 0) {
-      console.log(chalk.gray('  (empty)'));
+      console.log(picocolors.gray('  (empty)'));
     } else {
-      console.log(chalk.gray(`  total: ${total}`));
+      console.log(picocolors.gray(`  total: ${total}`));
     }
   }
 
@@ -94,7 +94,7 @@ export class StatusCommand {
     if (await fs.pathExists(summariesPath)) {
       const count = await this.countFilesRecursive(summariesPath);
       if (count > 0) {
-        console.log(chalk.white(`  summaries: ${count}`));
+        console.log(picocolors.white(`  summaries: ${count}`));
         total += count;
       }
     }
@@ -104,7 +104,7 @@ export class StatusCommand {
       const files = await fs.readdir(conceptsPath);
       const count = files.filter(f => !f.startsWith('.')).length;
       if (count > 0) {
-        console.log(chalk.white(`  concepts: ${count}`));
+        console.log(picocolors.white(`  concepts: ${count}`));
         total += count;
       }
     }

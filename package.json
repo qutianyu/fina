@@ -2,15 +2,32 @@
   "name": "fina",
   "version": "0.3.0",
   "description": "AI Knowledge Base CLI - Transform raw materials into a queryable wiki",
-  "main": "src/index.ts",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "electron"
+  ],
   "bin": {
     "fina": "./bin/fina"
   },
   "scripts": {
-    "dev": "tsx src/index.ts",
+    "dev": "concurrently \"npm run dev:web\" \"wait-on http://localhost:5173 && npm run dev:electron\"",
+    "dev:cli": "tsx src/index.ts",
+    "dev:web": "npm run dev -w @fina/web",
+    "dev:electron": "NODE_ENV=development electron electron/dist/main.js",
+    "build": "npm run build:core && npm run build:web && npm run build:electron",
+    "build:core": "npm run build -w @fina/core",
+    "build:web": "npm run build -w @fina/web",
+    "build:electron": "npm run build -w @fina/electron",
+    "pack": "electron-builder",
     "start": "tsx src/index.ts",
-    "typecheck": "tsc --noEmit",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run tests/unit/",
+    "test:integration": "vitest run tests/integration/",
+    "test:e2e": "vitest run tests/e2e/",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
   },
   "repository": {
     "type": "git",
@@ -23,21 +40,85 @@
     "url": "https://github.com/qutianyu/fina/issues"
   },
   "homepage": "https://github.com/qutianyu/fina#readme",
+  "build": {
+    "appId": "com.fina.app",
+    "productName": "Fina",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/dist/**/*",
+      "packages/web/dist/**/*",
+      "packages/core/dist/**/*",
+      "packages/core/prompts/**/*",
+      "packages/core/defaults/**/*",
+      "node_modules/@fina/core/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "packages/core/prompts",
+        "to": "prompts"
+      },
+      {
+        "from": "packages/core/defaults",
+        "to": "defaults"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Office"
+    }
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
     "axios": "^1.14.0",
-    "chalk": "^5.6.2",
     "cheerio": "^1.2.0",
     "commander": "^14.0.3",
     "fs-extra": "^11.3.4",
     "gray-matter": "^4.0.3",
-    "openai": "^6.33.0"
+    "openai": "^6.33.0",
+    "picocolors": "1.1.1"
   },
   "devDependencies": {
     "@types/cheerio": "^0.22.35",
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^25.5.2",
+    "@vitest/coverage-v8": "^4.1.3",
+    "concurrently": "^8.2.2",
+    "electron": "^30.0.0",
+    "electron-builder": "^24.0.0",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.3",
+    "wait-on": "^7.2.0"
   }
 }

@@ -1,20 +1,15 @@
 import * as readline from 'readline';
-import chalk from 'chalk';
-import { AddCommand } from '../commands/add';
-import { MakeCommand } from '../commands/make';
-import { StatusCommand } from '../commands/status';
+import picocolors from 'picocolors';
 import { QueryCommand } from '../commands/query';
 import { ConfigManager } from './config';
 import { SkillManager } from './skills';
+import { SessionManager } from './session';
+import { COMMANDS, findShellCommand, ShellState } from './commands';
+import { ChatMessage } from '../types';
 
-const COMMANDS = [
-  { name: '/add', description: 'Add URL or local file' },
-  { name: '/batch-add', description: 'Add all files from a directory' },
-  { name: '/make', description: 'Compile/refresh wiki' },
-  { name: '/open', description: 'Direct chat (no wiki needed)' },
-  { name: '/status', description: 'Show stats' },
-  { name: '/search', description: 'Search wiki' },
+const EXTRA_SHELL_COMMANDS = [
   { name: '/exit', description: 'Exit shell' },
+  { name: '/help', description: 'Show help' },
 ];
 
 export class Shell {
@@ -23,86 +18,64 @@ export class Shell {
   private running: boolean = true;
   private history: string[] = [];
   private historyIndex: number = -1;
+  private sessionManager: SessionManager;
+
+  private shellState: ShellState;
 
   constructor(config: ConfigManager, skillManager: SkillManager | null = null) {
     this.config = config;
     this.skillManager = skillManager;
+    this.sessionManager = new SessionManager(config.getKnowledgeBaseDir());
+
+    this.shellState = {
+      currentSessionId: null,
+      sessionManager: this.sessionManager
+    };
+  }
+
+  async init(): Promise<void> {
+    await this.sessionManager.init();
+    const sessions = await this.sessionManager.listSessions();
+    if (sessions.length === 0) {
+      const defaultSession = await this.sessionManager.createSession('default');
+      this.shellState.currentSessionId = defaultSession.id;
+    } else {
+      // Use most recently updated session
+      this.shellState.currentSessionId = sessions[0].id;
+    }
   }
 
   printBanner(): void {
-    console.log(chalk.cyan(`
+    console.log(picocolors.cyan(`
 ╔═══════════════════════════════════════════════════════════════╗
 ║                       Fina CLI                                 ║
 ║            AI Knowledge Base - Your Personal Librarian        ║
 ╚═══════════════════════════════════════════════════════════════╝
 `));
-    console.log(chalk.gray('Commands:'));
+    console.log(picocolors.gray('Commands:'));
     for (const cmd of COMMANDS) {
-      console.log(`  ${chalk.yellow(cmd.name.padEnd(10))} ${chalk.gray('- ' + cmd.description)}`);
+      const argsStr = cmd.args.length > 0 ? ` <${cmd.args[0].name}>` : '';
+      console.log(`  ${picocolors.yellow(cmd.name.padEnd(12))} ${picocolors.gray('- ' + cmd.description + argsStr)}`);
     }
-    console.log(chalk.gray('  (just type)         - Ask questions'));
+    for (const cmd of EXTRA_SHELL_COMMANDS) {
+      console.log(`  ${picocolors.yellow(cmd.name.padEnd(12))} ${picocolors.gray('- ' + cmd.description)}`);
+    }
+    console.log(picocolors.gray('  (just type)       - Ask questions'));
     console.log();
   }
 
   async handleCommand(input: string): Promise<void> {
-    const trimmed = input.trim();
+    let trimmed = input.trim();
 
+    // 向后兼容: /make deep → /make --deep
+    if (trimmed === '/make deep') {
+      trimmed = '/make --deep';
+    }
+
+    // Shell 特有命令
     if (trimmed === '/exit' || trimmed === '/quit' || trimmed === 'exit' || trimmed === 'quit') {
-      console.log(chalk.green('Goodbye!'));
+      console.log(picocolors.green('Goodbye!'));
       this.running = false;
-      return;
-    }
-
-    if (trimmed === '/status') {
-      const cmd = new StatusCommand(this.config);
-      await cmd.execute();
-      return;
-    }
-
-    if (trimmed.startsWith('/batch-add ')) {
-      const dir = trimmed.slice(11).trim();
-      if (!dir) {
-        console.log(chalk.red('Usage: /batch-add <directory>'));
-        return;
-      }
-      const cmd = new AddCommand(this.config, this.skillManager);
-      await cmd.execute(dir, true);
-      return;
-    }
-
-    if (trimmed.startsWith('/add ')) {
-      const source = trimmed.slice(5).trim();
-      if (!source) {
-        console.log(chalk.red('Usage: /add <url-or-path>'));
-        return;
-      }
-      const cmd = new AddCommand(this.config, this.skillManager);
-      await cmd.execute(source);
-      return;
-    }
-
-    if (trimmed === '/make') {
-      const cmd = new MakeCommand(this.config);
-      await cmd.execute();
-      return;
-    }
-
-    if (trimmed.startsWith('/open ')) {
-      const query = trimmed.slice(6).trim();
-      const cmd = new QueryCommand(this.config);
-      await cmd.executeDirect(query);
-      return;
-    }
-
-    if (trimmed === '/open') {
-      console.log(chalk.gray('Usage: /open <your question>'));
-      return;
-    }
-
-    if (trimmed.startsWith('/search ')) {
-      const query = trimmed.slice(8).trim();
-      const cmd = new QueryCommand(this.config);
-      await cmd.execute(query);
       return;
     }
 
@@ -112,23 +85,57 @@ export class Shell {
     }
 
     if (trimmed === '/') {
-      console.log(chalk.gray('Commands:'));
+      console.log(picocolors.gray('Commands:'));
       for (const cmd of COMMANDS) {
-        console.log(`  ${chalk.yellow(cmd.name.padEnd(10))} ${chalk.gray('- ' + cmd.description)}`);
+        console.log(`  ${picocolors.yellow(cmd.name.padEnd(12))} ${picocolors.gray('- ' + cmd.description)}`);
       }
       return;
     }
 
-    if (trimmed.startsWith('/')) {
-      console.log(chalk.yellow(`Unknown command: ${trimmed.split(' ')[0]}. Type /help for available commands.`));
+    // 从共享命令表中查找匹配
+    const matched = findShellCommand(trimmed);
+    if (matched) {
+      // 检查必填参数
+      for (const argDef of matched.def.args) {
+        if (argDef.required && !matched.args[argDef.name]) {
+          console.log(picocolors.red(`Usage: ${matched.def.name} <${argDef.name}>`));
+          return;
+        }
+      }
+      await matched.def.action(matched.args, this.config, this.skillManager, this.shellState);
       return;
     }
 
+    if (trimmed.startsWith('/')) {
+      console.log(picocolors.yellow(`Unknown command: ${trimmed.split(' ')[0]}. Type /help for available commands.`));
+      return;
+    }
+
+    // 非命令输入 → 作为搜索查询（使用 session 历史）
     const cmd = new QueryCommand(this.config);
-    await cmd.execute(trimmed);
+    const sessionId = this.shellState.currentSessionId;
+    let history: ChatMessage[] = [];
+
+    if (sessionId) {
+      const session = await this.sessionManager.getSession(sessionId);
+      if (session) {
+        history = session.messages;
+      }
+    }
+
+    const answer = await cmd.execute(trimmed, history);
+    if (answer) {
+      // Save to session history
+      if (sessionId) {
+        const now = Math.floor(Date.now() / 1000);
+        await this.sessionManager.addMessage(sessionId, { role: 'user', content: trimmed, timestamp: now });
+        await this.sessionManager.addMessage(sessionId, { role: 'assistant', content: answer, timestamp: now });
+      }
+    }
   }
 
   async start(): Promise<void> {
+    await this.init();
     this.printBanner();
 
     const rl = readline.createInterface({
@@ -146,7 +153,7 @@ export class Shell {
 
     const printInput = (): void => {
       process.stdout.write('\r\x1b[K');
-      process.stdout.write(chalk.cyan('fina > ') + input);
+      process.stdout.write(picocolors.cyan('fina > ') + input);
     };
 
     printInput();
@@ -164,7 +171,7 @@ export class Shell {
 
         if (key.name === 'ctrl-c') {
           cleanup();
-          console.log(chalk.yellow('\nExiting...'));
+          console.log(picocolors.yellow('\nExiting...'));
           resolve();
           return;
         }
@@ -223,7 +230,7 @@ export class Shell {
           }
           input = this.history[this.historyIndex] || '';
           process.stdout.write('\r\x1b[K');
-          process.stdout.write(chalk.cyan('fina > ') + input);
+          process.stdout.write(picocolors.cyan('fina > ') + input);
           return;
         }
 
@@ -237,7 +244,7 @@ export class Shell {
             input = this.history[this.historyIndex] || '';
           }
           process.stdout.write('\r\x1b[K');
-          process.stdout.write(chalk.cyan('fina > ') + input);
+          process.stdout.write(picocolors.cyan('fina > ') + input);
           return;
         }
 
